@@ -10,6 +10,10 @@ Gem::Specification.new do |spec|
   spec.summary = "Field-level encryption for Ruby + MySQL 5.7 with blind indexes and DB UDFs"
   spec.description = "A narrow production-oriented field encryption layer: AES-256-GCM envelope, HMAC-SHA256 blind indexes, Ruby extension, MySQL UDF source, admin SQL contracts, and migration helpers."
   spec.license = "MIT"
+  spec.homepage = "https://github.com/roman-haidarov/secure_db_fields"
+  spec.metadata["homepage_uri"] = spec.homepage
+  spec.metadata["source_code_uri"] = "#{spec.homepage}/tree/main"
+  spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.required_ruby_version = ">= 2.7.1"
 
   spec.files = Dir.chdir(__dir__) do

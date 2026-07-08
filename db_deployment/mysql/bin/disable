@@ -1,7 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# shellcheck source=common
-source "$(dirname "$0")/common"
 
-mysql_cmd < "$ROOT/sql/uninstall.sql"
-printf 'secure_db_fields mysql UDFs disabled\n'
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MYSQL="${MYSQL:-mysql}"
+DEFAULTS_FILE=""
+MYSQL_SOCKET="${MYSQL_SOCKET:-}"
+
+usage() {
+  cat <<'TEXT'
+Usage: MYSQL_SOCKET=/run/mysqld/mysqld.sock ./bin/disable [--mysql PATH] [--defaults-extra-file PATH]
+
+Removes only SecureDBFields-owned UDF registrations and leaves the native library
+in place.
+TEXT
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --mysql)
+      [ "$#" -ge 2 ] || { echo '--mysql requires a path' >&2; exit 2; }
+      MYSQL="$2"; shift 2 ;;
+    --defaults-extra-file)
+      [ "$#" -ge 2 ] || { echo '--defaults-extra-file requires a path' >&2; exit 2; }
+      DEFAULTS_FILE="$2"; shift 2 ;;
+    --help|-h)
+      usage; exit 0 ;;
+    *)
+      echo "secure_db_fields mysql disable: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+# shellcheck source=common
+source "$ROOT/bin/common"
+sdf_resolve_mysql
+sdf_mysql_args
+sdf_require_mysql57
+sdf_require_expected_socket
+sdf_drop_owned_udfs
+
+echo 'SecureDBFields MySQL UDFs are disabled.'

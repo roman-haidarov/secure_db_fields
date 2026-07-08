@@ -272,11 +272,15 @@ module SecureDBFields
       end
 
       def checksums
-        lines = BUNDLE_FILES.map do |src, dst, _mode|
-          data = File.binread(File.join(ROOT, src))
-          "#{Digest::SHA256.hexdigest(data)}  #{dst}"
+        entries = BUNDLE_FILES.map do |src, dst, _mode|
+          [dst, File.binread(File.join(ROOT, src))]
         end
-        lines.join("\n") + "\n"
+        entries << ["VERSION", SecureDBFields::VERSION + "\n"]
+        entries << ["BUNDLE_FORMAT", BUNDLE_FORMAT_VERSION.to_s + "\n"]
+
+        entries.sort_by(&:first).map do |dst, data|
+          "#{Digest::SHA256.hexdigest(data)}  #{dst}"
+        end.join("\n") + "\n"
       end
     end
   end

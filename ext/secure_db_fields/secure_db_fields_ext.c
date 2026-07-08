@@ -1,3 +1,4 @@
+#define OPENSSL_SUPPRESS_DEPRECATED 1
 #include <ruby.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>

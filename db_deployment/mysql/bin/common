@@ -1,39 +1,177 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UDF_SO="secure_db_fields_mysql.so"
-MYSQL_ARGS_ARRAY=()
-if [ -n "${MYSQL_ARGS:-}" ]; then
-  # shellcheck disable=SC2206
-  MYSQL_ARGS_ARRAY=(${MYSQL_ARGS})
-fi
+SDF_UDF_LIBRARY='secure_db_fields_mysql.so'
+SDF_UDF_NAMES=(
+  secure_db_fields_version
+  secure_db_fields_is_valid_envelope
+  secure_db_fields_envelope_key_id
+  secure_db_fields_decrypt
+  secure_db_fields_decrypt_field
+  secure_db_fields_bidx
+  secure_phone_bidx
+  secure_phone_prefix_bidx
+)
 
-mysql_cmd() {
-  mysql "${MYSQL_ARGS_ARRAY[@]}" "$@"
+sdf_die() {
+  echo "secure_db_fields mysql: $*" >&2
+  exit 2
 }
 
-mysql_batch() {
-  mysql "${MYSQL_ARGS_ARRAY[@]}" --batch --skip-column-names --raw "$@"
-}
-
-plugin_dir() {
-  if [ -n "${MYSQL_PLUGIN_DIR:-}" ]; then
-    printf '%s\n' "$MYSQL_PLUGIN_DIR"
-    return 0
-  fi
-  mysql_batch -e 'SELECT @@plugin_dir;'
-}
-
-build_udf() {
-  cd "$ROOT"
-  if command -v mysql_config >/dev/null 2>&1 && mysql_config --cflags >/dev/null 2>&1; then
-    make "$UDF_SO"
+sdf_resolve_mysql() {
+  if [[ "$MYSQL" == */* ]]; then
+    [ -x "$MYSQL" ] || sdf_die "mysql client is not executable: $MYSQL"
   else
-    make abi57
+    MYSQL="$(command -v "$MYSQL" || true)"
+    [ -n "$MYSQL" ] || sdf_die 'mysql client was not found'
   fi
 }
 
-function_count() {
-  mysql_batch -e "SELECT COUNT(*) FROM mysql.func WHERE dl = '${UDF_SO}';"
+sdf_mysql_args() {
+  MYSQL_ARGS=(--batch --skip-column-names --raw --protocol=SOCKET)
+  if [ -n "${DEFAULTS_FILE:-}" ]; then
+    [ -f "$DEFAULTS_FILE" ] || sdf_die "defaults file does not exist: $DEFAULTS_FILE"
+    MYSQL_ARGS=("--defaults-extra-file=$DEFAULTS_FILE" "${MYSQL_ARGS[@]}")
+  fi
+  if [ -n "${MYSQL_SOCKET:-}" ]; then
+    MYSQL_ARGS+=("--socket=$MYSQL_SOCKET")
+  fi
+}
+
+sdf_query() {
+  "$MYSQL" "${MYSQL_ARGS[@]}" -e "$1"
+}
+
+sdf_exec_file() {
+  "$MYSQL" "${MYSQL_ARGS[@]}" < "$1"
+}
+
+sdf_server_version() {
+  sdf_query 'SELECT VERSION();' | tr -d '\r\n'
+}
+
+sdf_require_mysql57() {
+  local version
+  version="$(sdf_server_version)"
+  case "$version" in
+    5.7.*) ;;
+    *) sdf_die "this bundle targets MySQL 5.7; server reports $version" ;;
+  esac
+}
+
+sdf_plugin_dir() {
+  sdf_query 'SELECT @@plugin_dir;' | tr -d '\r\n'
+}
+
+sdf_server_socket() {
+  sdf_query 'SELECT @@socket;' | tr -d '\r\n'
+}
+
+sdf_server_hostname() {
+  sdf_query 'SELECT @@hostname;' | tr -d '\r\n'
+}
+
+sdf_require_expected_socket() {
+  local actual_socket
+  actual_socket="$(sdf_server_socket)"
+  [ -n "$actual_socket" ] || sdf_die 'MySQL returned an empty @@socket'
+  if [ -n "${MYSQL_SOCKET:-}" ] && [ "$MYSQL_SOCKET" != "$actual_socket" ]; then
+    sdf_die "connected server socket $actual_socket does not match MYSQL_SOCKET $MYSQL_SOCKET"
+  fi
+}
+
+sdf_read_udf_state() {
+  local rows name dl candidate expected_name
+
+  SDF_EXPECTED_OWNED=0
+  SDF_FOREIGN_EXPECTED=0
+  SDF_UNEXPECTED_LIBRARY=0
+  SDF_REGISTERED_ROWS=()
+
+  local names_sql=""
+  local expected=()
+  for name in "${SDF_UDF_NAMES[@]}"; do
+    expected+=("'${name}'")
+  done
+  names_sql="$(IFS=,; printf '%s' "${expected[*]}")"
+
+  rows="$(sdf_query "SELECT name, dl FROM mysql.func WHERE dl = '${SDF_UDF_LIBRARY}' OR name IN (${names_sql}) ORDER BY name;")"
+  while IFS=$'\t' read -r name dl; do
+    [ -n "$name" ] || continue
+    SDF_REGISTERED_ROWS+=("$name"$'\t'"$dl")
+    expected_name=0
+    for candidate in "${SDF_UDF_NAMES[@]}"; do
+      if [ "$candidate" = "$name" ]; then expected_name=1; break; fi
+    done
+    if [ "$expected_name" -eq 1 ]; then
+      if [ "$dl" = "$SDF_UDF_LIBRARY" ]; then
+        SDF_EXPECTED_OWNED=$((SDF_EXPECTED_OWNED + 1))
+      else
+        SDF_FOREIGN_EXPECTED=$((SDF_FOREIGN_EXPECTED + 1))
+      fi
+    elif [ "$dl" = "$SDF_UDF_LIBRARY" ]; then
+      SDF_UNEXPECTED_LIBRARY=$((SDF_UNEXPECTED_LIBRARY + 1))
+    fi
+  done <<< "$rows"
+}
+
+sdf_state_is_clean_absent() {
+  [ "$SDF_EXPECTED_OWNED" -eq 0 ] && [ "$SDF_FOREIGN_EXPECTED" -eq 0 ] && [ "$SDF_UNEXPECTED_LIBRARY" -eq 0 ]
+}
+
+sdf_state_is_clean_enabled() {
+  [ "$SDF_EXPECTED_OWNED" -eq "${#SDF_UDF_NAMES[@]}" ] && [ "$SDF_FOREIGN_EXPECTED" -eq 0 ] && [ "$SDF_UNEXPECTED_LIBRARY" -eq 0 ]
+}
+
+sdf_require_clean_owned_state() {
+  if [ "$SDF_FOREIGN_EXPECTED" -ne 0 ]; then
+    sdf_die 'one or more expected UDF names are registered to a foreign SONAME; refusing to modify them'
+  fi
+  if [ "$SDF_UNEXPECTED_LIBRARY" -ne 0 ]; then
+    sdf_die "unexpected registrations reference ${SDF_UDF_LIBRARY}; refusing to modify the shared library"
+  fi
+}
+
+sdf_register_expected_udfs() {
+  sdf_exec_file "$ROOT/sql/install.sql"
+}
+
+sdf_drop_owned_udfs() {
+  local name
+  sdf_read_udf_state
+  sdf_require_clean_owned_state
+  for name in "${SDF_UDF_NAMES[@]}"; do
+    if sdf_query "SELECT COUNT(*) FROM mysql.func WHERE name = '${name}' AND dl = '${SDF_UDF_LIBRARY}';" | tr -d '\r\n' | grep -qx '1'; then
+      sdf_query "DROP FUNCTION ${name};"
+    fi
+  done
+}
+
+sdf_smoke_check() {
+  local version
+  version="$(sdf_query 'SELECT secure_db_fields_version();' | tr -d '\r\n')"
+  case "$version" in
+    *'secure_db_fields'*) ;;
+    *) sdf_die "version() smoke check failed: $version" ;;
+  esac
+}
+
+sdf_library_checksum() {
+  local library="$1"
+  if [ ! -f "$library" ]; then
+    printf '%s\n' 'missing'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$library" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$library" | awk '{print $1}'
+  else
+    printf '%s\n' 'unavailable (sha256sum or shasum is required)'
+  fi
+}
+
+sdf_build_udf() {
+  cd "$ROOT"
+  make clean >/dev/null 2>&1 || true
+  # The DBA bundle is intentionally self-contained for MySQL 5.7 and does not
+  # require mysql.h / libmysqlclient development headers on the DB host.
+  make abi57
 }
