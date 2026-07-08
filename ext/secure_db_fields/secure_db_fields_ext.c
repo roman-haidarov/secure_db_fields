@@ -14,9 +14,12 @@ static VALUE eKeyError;
 
 static void rb_sdf_raise(sdf_status st, const char *err) {
     VALUE klass = eError;
-    if (st == SDF_ERR_AUTH) klass = eAuthError;
-    else if (st == SDF_ERR_FORMAT) klass = eFormatError;
-    else if (st == SDF_ERR_KEY) klass = eKeyError;
+    if (st == SDF_ERR_AUTH)
+        klass = eAuthError;
+    else if (st == SDF_ERR_FORMAT)
+        klass = eFormatError;
+    else if (st == SDF_ERR_KEY)
+        klass = eKeyError;
     rb_raise(klass, "%s: %s", sdf_status_name(st), err && err[0] ? err : "unknown error");
 }
 
@@ -40,15 +43,18 @@ static VALUE rb_sdf_encrypt(int argc, VALUE *argv, VALUE self) {
     StringValue(aad);
     if (!NIL_P(key_id_value)) {
         unsigned long id = NUM2ULONG(key_id_value);
-        if (id == 0 || id > UINT32_MAX) rb_raise(rb_eArgError, "key_id must be between 1 and 2^32-1");
+        if (id == 0 || id > UINT32_MAX)
+            rb_raise(rb_eArgError, "key_id must be between 1 and 2^32-1");
         key_id = (uint32_t)id;
     }
 
-    st = sdf_encrypt_aes_256_gcm((const unsigned char *)RSTRING_PTR(plaintext), (size_t)RSTRING_LEN(plaintext),
+    st = sdf_encrypt_aes_256_gcm((const unsigned char *)RSTRING_PTR(plaintext),
+                                 (size_t)RSTRING_LEN(plaintext),
                                  (const unsigned char *)RSTRING_PTR(key), (size_t)RSTRING_LEN(key),
                                  (const unsigned char *)RSTRING_PTR(aad), (size_t)RSTRING_LEN(aad),
                                  key_id, &out, &out_len, err, sizeof(err));
-    if (st != SDF_OK) rb_sdf_raise(st, err);
+    if (st != SDF_OK)
+        rb_sdf_raise(st, err);
     VALUE result = rb_str_new((const char *)out, (long)out_len);
     free(out);
     return result;
@@ -64,11 +70,13 @@ static VALUE rb_sdf_decrypt(VALUE self, VALUE envelope, VALUE key, VALUE aad) {
     StringValue(envelope);
     StringValue(key);
     StringValue(aad);
-    st = sdf_decrypt_aes_256_gcm((const unsigned char *)RSTRING_PTR(envelope), (size_t)RSTRING_LEN(envelope),
+    st = sdf_decrypt_aes_256_gcm((const unsigned char *)RSTRING_PTR(envelope),
+                                 (size_t)RSTRING_LEN(envelope),
                                  (const unsigned char *)RSTRING_PTR(key), (size_t)RSTRING_LEN(key),
                                  (const unsigned char *)RSTRING_PTR(aad), (size_t)RSTRING_LEN(aad),
                                  &out, &out_len, err, sizeof(err));
-    if (st != SDF_OK) rb_sdf_raise(st, err);
+    if (st != SDF_OK)
+        rb_sdf_raise(st, err);
     VALUE result = rb_str_new((const char *)out, (long)out_len);
     sdf_secure_clear(out, out_len);
     free(out);
@@ -81,16 +89,20 @@ static VALUE rb_sdf_key_id(VALUE self, VALUE envelope) {
     sdf_status st;
     (void)self;
     StringValue(envelope);
-    st = sdf_parse_key_id((const unsigned char *)RSTRING_PTR(envelope), (size_t)RSTRING_LEN(envelope),
-                          &key_id, err, sizeof(err));
-    if (st != SDF_OK) rb_sdf_raise(st, err);
+    st = sdf_parse_key_id((const unsigned char *)RSTRING_PTR(envelope),
+                          (size_t)RSTRING_LEN(envelope), &key_id, err, sizeof(err));
+    if (st != SDF_OK)
+        rb_sdf_raise(st, err);
     return UINT2NUM(key_id);
 }
 
 static VALUE rb_sdf_valid_envelope(VALUE self, VALUE envelope) {
     (void)self;
     StringValue(envelope);
-    return sdf_is_valid_envelope((const unsigned char *)RSTRING_PTR(envelope), (size_t)RSTRING_LEN(envelope)) ? Qtrue : Qfalse;
+    return sdf_is_valid_envelope((const unsigned char *)RSTRING_PTR(envelope),
+                                 (size_t)RSTRING_LEN(envelope))
+               ? Qtrue
+               : Qfalse;
 }
 
 static VALUE rb_sdf_blind_index(VALUE self, VALUE value, VALUE key) {
@@ -101,16 +113,20 @@ static VALUE rb_sdf_blind_index(VALUE self, VALUE value, VALUE key) {
     StringValue(value);
     StringValue(key);
     st = sdf_blind_index((const unsigned char *)RSTRING_PTR(value), (size_t)RSTRING_LEN(value),
-                         (const unsigned char *)RSTRING_PTR(key), (size_t)RSTRING_LEN(key),
-                         out, err, sizeof(err));
-    if (st != SDF_OK) rb_sdf_raise(st, err);
+                         (const unsigned char *)RSTRING_PTR(key), (size_t)RSTRING_LEN(key), out,
+                         err, sizeof(err));
+    if (st != SDF_OK)
+        rb_sdf_raise(st, err);
     return rb_str_new((const char *)out, SDF_BIDX_BYTES);
 }
 
 static VALUE rb_sdf_e164_p(VALUE self, VALUE value) {
     (void)self;
     StringValue(value);
-    return sdf_is_canonical_e164((const unsigned char *)RSTRING_PTR(value), (size_t)RSTRING_LEN(value)) ? Qtrue : Qfalse;
+    return sdf_is_canonical_e164((const unsigned char *)RSTRING_PTR(value),
+                                 (size_t)RSTRING_LEN(value))
+               ? Qtrue
+               : Qfalse;
 }
 
 static VALUE rb_sdf_phone_bidx(VALUE self, VALUE e164, VALUE key) {
@@ -123,11 +139,13 @@ static VALUE rb_sdf_phone_bidx(VALUE self, VALUE e164, VALUE key) {
     st = sdf_phone_exact_bidx((const unsigned char *)RSTRING_PTR(e164), (size_t)RSTRING_LEN(e164),
                               (const unsigned char *)RSTRING_PTR(key), (size_t)RSTRING_LEN(key),
                               out, err, sizeof(err));
-    if (st != SDF_OK) rb_sdf_raise(st, err);
+    if (st != SDF_OK)
+        rb_sdf_raise(st, err);
     return rb_str_new((const char *)out, SDF_BIDX_BYTES);
 }
 
-static VALUE rb_sdf_phone_prefix_bidx(VALUE self, VALUE e164, VALUE prefix_digits_value, VALUE key) {
+static VALUE rb_sdf_phone_prefix_bidx(VALUE self, VALUE e164, VALUE prefix_digits_value,
+                                      VALUE key) {
     unsigned char out[SDF_BIDX_BYTES];
     char err[SDF_MAX_ERR];
     sdf_status st;
@@ -136,12 +154,13 @@ static VALUE rb_sdf_phone_prefix_bidx(VALUE self, VALUE e164, VALUE prefix_digit
     StringValue(e164);
     StringValue(key);
     prefix_digits = NUM2ULONG(prefix_digits_value);
-    if (prefix_digits > 15) rb_raise(rb_eArgError, "prefix_digits must be between 1 and 15");
+    if (prefix_digits > 15)
+        rb_raise(rb_eArgError, "prefix_digits must be between 1 and 15");
     st = sdf_phone_prefix_bidx((const unsigned char *)RSTRING_PTR(e164), (size_t)RSTRING_LEN(e164),
-                               (unsigned int)prefix_digits,
-                               (const unsigned char *)RSTRING_PTR(key), (size_t)RSTRING_LEN(key),
-                               out, err, sizeof(err));
-    if (st != SDF_OK) rb_sdf_raise(st, err);
+                               (unsigned int)prefix_digits, (const unsigned char *)RSTRING_PTR(key),
+                               (size_t)RSTRING_LEN(key), out, err, sizeof(err));
+    if (st != SDF_OK)
+        rb_sdf_raise(st, err);
     return rb_str_new((const char *)out, SDF_BIDX_BYTES);
 }
 
@@ -152,7 +171,8 @@ static VALUE rb_sdf_hex_decode_key(VALUE self, VALUE hex) {
     (void)self;
     StringValue(hex);
     st = sdf_hex_decode_32(StringValueCStr(hex), out, err, sizeof(err));
-    if (st != SDF_OK) rb_sdf_raise(st, err);
+    if (st != SDF_OK)
+        rb_sdf_raise(st, err);
     return rb_str_new((const char *)out, SDF_KEY_BYTES);
 }
 
