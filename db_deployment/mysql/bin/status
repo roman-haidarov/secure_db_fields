@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname "$0")/common"
+
+printf 'plugin_dir=%s\n' "$(plugin_dir)"
+printf 'registered_functions=%s\n' "$(function_count)"
+if mysql_cmd -e 'SELECT secure_db_fields_version() AS version;' >/dev/null 2>&1; then
+  mysql_cmd -e 'SELECT secure_db_fields_version() AS version;'
+else
+  echo 'secure_db_fields_version() is not enabled'
+fi

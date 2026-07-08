@@ -13,8 +13,10 @@ Gem::Specification.new do |spec|
   spec.required_ruby_version = ">= 2.7.1"
 
   spec.files = Dir.chdir(__dir__) do
-    Dir["lib/**/*.rb", "ext/**/*", "mysql_udf/**/*", "sql/**/*", "docs/**/*", "examples/**/*", "README.md", "LICENSE.txt", "Rakefile"]
+    Dir["lib/**/*.rb", "ext/**/*", "mysql_udf/**/*", "db_deployment/**/*", "sql/**/*", "docs/**/*", "examples/**/*", "exe/*", "README.md", "LICENSE.txt", "Rakefile"]
   end
+  spec.bindir = "exe"
+  spec.executables = ["secure_db_fields"]
   spec.extensions = ["ext/secure_db_fields/extconf.rb"]
   spec.require_paths = ["lib"]
 

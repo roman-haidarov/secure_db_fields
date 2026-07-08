@@ -46,3 +46,18 @@ SDF_BIDX_PHONE_P7_KEY_HEX=<64 hex chars>
 ## Admin SQL boundary
 
 Readable views are for projection. Indexed search must use bidx predicates or stored procedures.
+
+## Hot-path implementation notes (0.1.1)
+
+The Ruby extension has separate scalar and batch paths:
+
+- Scalar `blind_index` keeps the simple shared C-core `sdf_blind_index` path.
+- Batch bidx methods use a fixed HMAC-SHA256 implementation in the Ruby extension:
+  the 64-byte ipad/opad SHA256 states are precomputed once per batch, then copied
+  per value. This avoids `HMAC_CTX_new/free/reset` and repeated pad hashing.
+- Packed batch methods (`*_many_packed`) return one binary String containing
+  concatenated 32-byte digests, avoiding Array + String-per-digest allocation.
+- Ruby encrypt/decrypt paths allocate the destination Ruby String first and call
+  `sdf_*_aes_256_gcm_into`, avoiding native `malloc -> rb_str_new copy -> free`.
+
+The version remains `0.1.1`; these are implementation-level hot-path optimizations.

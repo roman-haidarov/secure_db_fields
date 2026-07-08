@@ -1,0 +1,350 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  ruby:
+    name: Ruby ${{ matrix.ruby }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby:
+          - "2.7.1"
+          - "3.4"
+
+    env:
+      BUNDLE_WITHOUT: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Compile native extension
+        run: |
+          bundle exec rake compile
+
+      - name: Run Ruby tests
+        run: |
+          bundle exec rake test
+
+      - name: Build gem
+        run: |
+          gem build secure_db_fields.gemspec
+
+      - name: Check CLI syntax
+        run: |
+          ruby -c exe/secure_db_fields
+
+      - name: Check DB package command
+        run: |
+          mkdir -p tmp/ci
+          bundle exec ruby exe/secure_db_fields db package mysql \
+            --output tmp/ci/secure_db_fields-mysql.tar.gz \
+            --force
+          test -s tmp/ci/secure_db_fields-mysql.tar.gz
+          tar -tzf tmp/ci/secure_db_fields-mysql.tar.gz
+
+  mysql57-e2e:
+    name: MySQL 5.7 UDF e2e
+    runs-on: ubuntu-latest
+    needs: ruby
+
+    env:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: secure_db_fields_ci
+      MYSQL_CONTAINER: secure-db-fields-mysql57
+
+      SDF_ENC_KEY_HEX: "6161616161616161616161616161616161616161616161616161616161616161"
+      SDF_BIDX_KEY_HEX: "6262626262626262626262626262626262626262626262626262626262626262"
+      SDF_BIDX_PHONE_KEY_HEX: "6262626262626262626262626262626262626262626262626262626262626262"
+      SDF_BIDX_PHONE_P7_KEY_HEX: "6262626262626262626262626262626262626262626262626262626262626262"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev docker.io
+
+      - name: Set up Ruby 2.7.1
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "2.7.1"
+          bundler-cache: true
+
+      - name: Compile Ruby extension and run tests
+        run: |
+          bundle exec rake compile
+          bundle exec rake test
+
+      - name: Build gem
+        run: |
+          gem build secure_db_fields.gemspec
+
+      - name: Build DBA MySQL package from CLI
+        run: |
+          mkdir -p tmp/ci
+          bundle exec ruby exe/secure_db_fields db package mysql \
+            --output tmp/ci/secure_db_fields-mysql.tar.gz \
+            --force
+          test -s tmp/ci/secure_db_fields-mysql.tar.gz
+
+      - name: Start MySQL 5.7
+        run: |
+          docker run -d \
+            --name "$MYSQL_CONTAINER" \
+            -e MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+            -e MYSQL_DATABASE="$MYSQL_DATABASE" \
+            -p 3306:3306 \
+            mysql:5.7.44
+
+          for i in $(seq 1 90); do
+            if docker exec "$MYSQL_CONTAINER" \
+              mysqladmin ping -uroot -p"$MYSQL_ROOT_PASSWORD" --silent; then
+              echo "MySQL is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs "$MYSQL_CONTAINER"
+          exit 1
+
+      - name: Install build deps inside MySQL container
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            apt-get update &&
+            apt-get install -y build-essential make gcc libssl-dev tar gzip
+          '
+
+      - name: Copy DBA package to MySQL container
+        run: |
+          docker cp tmp/ci/secure_db_fields-mysql.tar.gz \
+            "$MYSQL_CONTAINER":/tmp/secure_db_fields-mysql.tar.gz
+
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            rm -rf /tmp/secure_db_fields-mysql &&
+            mkdir -p /tmp/secure_db_fields-mysql &&
+            tar -xzf /tmp/secure_db_fields-mysql.tar.gz -C /tmp/secure_db_fields-mysql --strip-components=1 &&
+            find /tmp/secure_db_fields-mysql -maxdepth 3 -type f | sort
+          '
+
+      - name: Build UDF inside MySQL container
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            cd /tmp/secure_db_fields-mysql &&
+            make verify &&
+            make doctor &&
+            make
+          '
+
+      - name: Install UDF shared object into plugin_dir
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            cd /tmp/secure_db_fields-mysql &&
+
+            PLUGIN_DIR="$(mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SHOW VARIABLES LIKE '\''plugin_dir'\''" | awk "{print \$2}")"
+            echo "plugin_dir=$PLUGIN_DIR"
+
+            test -n "$PLUGIN_DIR"
+            test -d "$PLUGIN_DIR"
+
+            cp secure_db_fields_mysql.so "$PLUGIN_DIR/"
+            chmod 755 "$PLUGIN_DIR/secure_db_fields_mysql.so"
+            ls -l "$PLUGIN_DIR/secure_db_fields_mysql.so"
+          '
+
+      - name: Install key file in MySQL container
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            mkdir -p /etc/secure_db_fields
+            cat > /etc/secure_db_fields/keys.env <<EOF
+          SDF_ENC_KEY_HEX=${SDF_ENC_KEY_HEX}
+          SDF_BIDX_KEY_HEX=${SDF_BIDX_KEY_HEX}
+          SDF_BIDX_PHONE_KEY_HEX=${SDF_BIDX_PHONE_KEY_HEX}
+          SDF_BIDX_PHONE_P7_KEY_HEX=${SDF_BIDX_PHONE_P7_KEY_HEX}
+          EOF
+            chown -R mysql:mysql /etc/secure_db_fields
+            chmod 750 /etc/secure_db_fields
+            chmod 640 /etc/secure_db_fields/keys.env
+            ls -la /etc/secure_db_fields
+          '
+
+      - name: Register UDF functions
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            cd /tmp/secure_db_fields-mysql &&
+            mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < sql/uninstall.sql || true &&
+            mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < sql/install.sql
+          '
+
+      - name: Check installed functions
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "
+              SELECT secure_db_fields_version() AS version;
+              SELECT name, dl FROM mysql.func WHERE dl = '\''secure_db_fields_mysql.so'\'' ORDER BY name;
+            "
+          '
+
+      - name: Generate encrypted fixture from Ruby
+        run: |
+          mkdir -p tmp/ci
+
+          bundle exec ruby -Ilib -Iext/secure_db_fields -rsecure_db_fields -e '
+            key  = "a" * 32
+            bkey = "b" * 32
+            uid  = ["00112233445566778899aabbccddeeff"].pack("H*")
+            aad  = "clients.phone:" + uid
+            phone = "+77771234567"
+
+            enc = SecureDBFields::Crypto.encrypt(phone, key: key, aad: aad, key_id: 1)
+            bidx = SecureDBFields::Crypto.phone_blind_index(phone, key: bkey)
+            p7 = SecureDBFields::Crypto.phone_prefix_blind_index(phone, prefix_digits: 7, key: bkey)
+
+            File.write("tmp/ci/fixture.sql", <<~SQL)
+              DROP TABLE IF EXISTS clients;
+              CREATE TABLE clients (
+                id BIGINT NOT NULL PRIMARY KEY AUTO_INCREMENT,
+                secure_row_uid BINARY(16) NOT NULL,
+                phone_enc VARBINARY(1024) NULL,
+                phone_bidx BINARY(32) NULL,
+                phone_bidx_p7 BINARY(32) NULL,
+                created_at DATETIME NOT NULL,
+                INDEX idx_clients_phone_bidx (phone_bidx),
+                INDEX idx_clients_phone_bidx_p7 (phone_bidx_p7)
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+              INSERT INTO clients (
+                secure_row_uid,
+                phone_enc,
+                phone_bidx,
+                phone_bidx_p7,
+                created_at
+              ) VALUES (
+                UNHEX("00112233445566778899aabbccddeeff"),
+                UNHEX("#{enc.unpack1("H*")}"),
+                UNHEX("#{bidx.unpack1("H*")}"),
+                UNHEX("#{p7.unpack1("H*")}"),
+                NOW()
+              );
+
+              DROP VIEW IF EXISTS admin_clients_readable;
+              CREATE VIEW admin_clients_readable AS
+                SELECT
+                  id,
+                  secure_decrypt_phone(phone_enc, secure_row_uid) AS phone,
+                  created_at
+                FROM clients;
+            SQL
+          '
+
+          cat tmp/ci/fixture.sql
+
+      - name: Load encrypted fixture
+        run: |
+          docker cp tmp/ci/fixture.sql "$MYSQL_CONTAINER":/tmp/fixture.sql
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < /tmp/fixture.sql
+          '
+
+      - name: Verify decrypt UDF
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "
+              SELECT secure_db_fields_is_valid_envelope(phone_enc) FROM clients;
+              SELECT secure_db_fields_envelope_key_id(phone_enc) FROM clients;
+              SELECT secure_decrypt_phone(phone_enc, secure_row_uid) FROM clients;
+              SELECT phone FROM admin_clients_readable;
+            " > /tmp/sdf_decrypt.out
+
+            cat /tmp/sdf_decrypt.out
+
+            grep -q "^1$" /tmp/sdf_decrypt.out
+            grep -q "^+77771234567$" /tmp/sdf_decrypt.out
+          '
+
+      - name: Verify exact bidx search
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "
+              SELECT COUNT(*)
+              FROM clients
+              WHERE phone_bidx = secure_phone_bidx('\''+77771234567'\'');
+            " > /tmp/sdf_exact_count.out
+
+            cat /tmp/sdf_exact_count.out
+            grep -q "^1$" /tmp/sdf_exact_count.out
+          '
+
+      - name: Verify prefix bidx search
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            mysql -N -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "
+              SELECT COUNT(*)
+              FROM clients
+              WHERE phone_bidx_p7 = secure_phone_prefix_bidx('\''+7777123'\'', 7);
+            " > /tmp/sdf_prefix_count.out
+
+            cat /tmp/sdf_prefix_count.out
+            grep -q "^1$" /tmp/sdf_prefix_count.out
+          '
+
+      - name: Verify indexes are used
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "
+              EXPLAIN SELECT id
+              FROM clients
+              WHERE phone_bidx = secure_phone_bidx('\''+77771234567'\'');
+            " > /tmp/sdf_explain_exact.out
+
+            cat /tmp/sdf_explain_exact.out
+            grep -q "idx_clients_phone_bidx" /tmp/sdf_explain_exact.out
+
+            mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" -e "
+              EXPLAIN SELECT id
+              FROM clients
+              WHERE phone_bidx_p7 = secure_phone_prefix_bidx('\''+7777123'\'', 7);
+            " > /tmp/sdf_explain_prefix.out
+
+            cat /tmp/sdf_explain_prefix.out
+            grep -q "idx_clients_phone_bidx_p7" /tmp/sdf_explain_prefix.out
+          '
+
+      - name: Uninstall UDF functions
+        if: always()
+        run: |
+          docker exec "$MYSQL_CONTAINER" bash -lc '
+            cd /tmp/secure_db_fields-mysql &&
+            mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < sql/uninstall.sql || true
+          '
+
+      - name: MySQL logs
+        if: failure()
+        run: |
+          docker logs "$MYSQL_CONTAINER" || true
+
+      - name: Stop MySQL container
+        if: always()
+        run: |
+          docker rm -f "$MYSQL_CONTAINER" || true

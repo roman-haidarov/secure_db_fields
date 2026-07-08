@@ -1,0 +1,49 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+if ARGV.first == "db"
+  require "secure_db_fields/db_deployment"
+  exit SecureDBFields::DBDeployment::CLI.run(ARGV.drop(1))
+end
+
+require "secure_db_fields"
+
+module SecureDBFields
+  class CLI
+    def self.run(argv)
+      new.run(argv)
+    end
+
+    def run(argv)
+      case argv.first
+      when "--version", "-v"
+        puts "secure_db_fields #{SecureDBFields::VERSION}"
+        0
+      when "--help", "-h", nil
+        puts help
+        0
+      else
+        warn "secure_db_fields: unknown command #{argv.first.inspect}"
+        warn help
+        2
+      end
+    end
+
+    private
+
+    def help
+      <<~TEXT
+        Usage:
+          secure_db_fields --version
+          secure_db_fields db package mysql [--output PATH] [--force]
+          secure_db_fields db view mysql --table DB.TABLE --field NAME:ENC_COLUMN \\
+            --uid-column secure_row_uid --view DB.VIEW --columns ID,CREATED_AT [--output PATH]
+
+        `db package mysql` creates a DBA handoff archive. Extract it on the MySQL 5.7
+        host and run `make doctor`, `sudo make install`, `make enable`, `make status`.
+      TEXT
+    end
+  end
+end
+
+exit SecureDBFields::CLI.run(ARGV)

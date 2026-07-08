@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UDF_SO="secure_db_fields_mysql.so"
+MYSQL_ARGS_ARRAY=()
+if [ -n "${MYSQL_ARGS:-}" ]; then
+  # shellcheck disable=SC2206
+  MYSQL_ARGS_ARRAY=(${MYSQL_ARGS})
+fi
+
+mysql_cmd() {
+  mysql "${MYSQL_ARGS_ARRAY[@]}" "$@"
+}
+
+mysql_batch() {
+  mysql "${MYSQL_ARGS_ARRAY[@]}" --batch --skip-column-names --raw "$@"
+}
+
+plugin_dir() {
+  if [ -n "${MYSQL_PLUGIN_DIR:-}" ]; then
+    printf '%s\n' "$MYSQL_PLUGIN_DIR"
+    return 0
+  fi
+  mysql_batch -e 'SELECT @@plugin_dir;'
+}
+
+build_udf() {
+  cd "$ROOT"
+  if command -v mysql_config >/dev/null 2>&1 && mysql_config --cflags >/dev/null 2>&1; then
+    make "$UDF_SO"
+  else
+    make abi57
+  fi
+}
+
+function_count() {
+  mysql_batch -e "SELECT COUNT(*) FROM mysql.func WHERE dl = '${UDF_SO}';"
+}

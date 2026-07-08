@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+test -f src/secure_db_fields_mysql.c
+test -f src/secure_db_fields_core.c
+test -f src/secure_db_fields_core.h
+test -f src/mysql_udf_abi_57.h
+test -f sql/install.sql
+test -f sql/uninstall.sql
+if find . -name '.DS_Store' | grep -q .; then
+  echo 'deployment bundle must not contain .DS_Store' >&2
+  exit 2
+fi
+cc -DSDF_MYSQL_UDF_ABI_57 -Isrc -fsyntax-only src/secure_db_fields_mysql.c
+printf 'secure_db_fields mysql bundle verify: ok\n'

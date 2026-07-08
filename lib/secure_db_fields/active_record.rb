@@ -2,8 +2,6 @@
 
 module SecureDBFields
   module ActiveRecord
-    # Small explicit helper, not a DSL generator. Include in a model only after
-    # adding the physical columns described in docs/final_decision.md.
     def self.included(base)
       base.extend(ClassMethods)
     end

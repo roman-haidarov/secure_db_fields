@@ -63,3 +63,36 @@ phone_bidx_p7 BINARY(32), INDEX idx_clients_phone_bidx_p7(phone_bidx_p7)
 
 Only add prefix columns confirmed by query inventory. `last4`/suffix is intentionally not part of
 the default schema because it has very low cardinality and high leakage.
+
+## MySQL 5.7 DBA handoff bundle
+
+The application developer can build a self-contained database-host archive and pass it to the DBA:
+
+```bash
+bundle exec secure_db_fields db package mysql --output secure_db_fields-mysql.tar.gz --force
+```
+
+On the MySQL 5.7 server the DBA extracts the archive and runs:
+
+```bash
+make verify
+make doctor
+sudo make install
+make enable
+make status
+```
+
+Keys are intentionally not included in the archive. Provision `/etc/secure_db_fields/keys.env` on the DB host before using decrypt/search UDFs.
+
+Readable view SQL can be generated from the application side as well:
+
+```bash
+bundle exec secure_db_fields db view mysql \
+  --table app.clients \
+  --field phone:phone_enc \
+  --uid-column secure_row_uid \
+  --view admin.clients_readable \
+  --columns id,created_at \
+  --output clients_readable.sql
+```
+

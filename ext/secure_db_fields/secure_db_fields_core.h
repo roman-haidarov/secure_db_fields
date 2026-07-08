@@ -38,10 +38,26 @@ typedef enum {
 
 const char *sdf_status_name(sdf_status status);
 
+size_t sdf_encrypt_aes_256_gcm_output_len(size_t plaintext_len);
+
+sdf_status sdf_encrypt_aes_256_gcm_into(const unsigned char *plaintext, size_t plaintext_len,
+                                        const unsigned char *key, size_t key_len,
+                                        const unsigned char *aad, size_t aad_len, uint32_t key_id,
+                                        unsigned char *out, size_t out_cap, size_t *out_len,
+                                        char *err, size_t err_len);
+
 sdf_status sdf_encrypt_aes_256_gcm(const unsigned char *plaintext, size_t plaintext_len,
                                    const unsigned char *key, size_t key_len,
                                    const unsigned char *aad, size_t aad_len, uint32_t key_id,
                                    unsigned char **out, size_t *out_len, char *err, size_t err_len);
+
+size_t sdf_decrypt_aes_256_gcm_output_cap(const unsigned char *envelope, size_t envelope_len);
+
+sdf_status sdf_decrypt_aes_256_gcm_into(const unsigned char *envelope, size_t envelope_len,
+                                        const unsigned char *key, size_t key_len,
+                                        const unsigned char *aad, size_t aad_len,
+                                        unsigned char *out, size_t out_cap, size_t *out_len,
+                                        char *err, size_t err_len);
 
 sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelope_len,
                                    const unsigned char *key, size_t key_len,

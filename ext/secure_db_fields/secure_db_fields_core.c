@@ -73,22 +73,25 @@ static sdf_status sdf_validate_key(const unsigned char *key, size_t key_len, cha
     return SDF_OK;
 }
 
-sdf_status sdf_encrypt_aes_256_gcm(const unsigned char *plaintext, size_t plaintext_len,
-                                   const unsigned char *key, size_t key_len,
-                                   const unsigned char *aad, size_t aad_len, uint32_t key_id,
-                                   unsigned char **out, size_t *out_len, char *err,
-                                   size_t err_len) {
+size_t sdf_encrypt_aes_256_gcm_output_len(size_t plaintext_len) {
+    return SDF_HEADER_BYTES + plaintext_len;
+}
+
+sdf_status sdf_encrypt_aes_256_gcm_into(const unsigned char *plaintext, size_t plaintext_len,
+                                        const unsigned char *key, size_t key_len,
+                                        const unsigned char *aad, size_t aad_len, uint32_t key_id,
+                                        unsigned char *out, size_t out_cap, size_t *out_len,
+                                        char *err, size_t err_len) {
     EVP_CIPHER_CTX *ctx = NULL;
     unsigned char nonce[SDF_GCM_NONCE_BYTES];
-    unsigned char *buf = NULL;
     int len = 0;
     int total = 0;
+    size_t needed;
 
     if (!out || !out_len || (!plaintext && plaintext_len > 0)) {
         sdf_set_err(err, err_len, "invalid encrypt arguments");
         return SDF_ERR_INVALID_ARGUMENT;
     }
-    *out = NULL;
     *out_len = 0;
     if (sdf_validate_key(key, key_len, err, err_len) != SDF_OK)
         return SDF_ERR_KEY;
@@ -105,25 +108,25 @@ sdf_status sdf_encrypt_aes_256_gcm(const unsigned char *plaintext, size_t plaint
         return SDF_ERR_INVALID_ARGUMENT;
     }
 
+    needed = sdf_encrypt_aes_256_gcm_output_len(plaintext_len);
+    if (out_cap < needed) {
+        sdf_set_err(err, err_len, "output buffer too small");
+        return SDF_ERR_INVALID_ARGUMENT;
+    }
+
     if (RAND_bytes(nonce, SDF_GCM_NONCE_BYTES) != 1) {
         sdf_set_err(err, err_len, "RAND_bytes failed");
         return SDF_ERR_RANDOM;
     }
 
-    buf = (unsigned char *)malloc(SDF_HEADER_BYTES + plaintext_len);
-    if (!buf) {
-        sdf_set_err(err, err_len, "malloc failed");
-        return SDF_ERR_NO_MEMORY;
-    }
-    memcpy(buf, SDF_MAGIC, SDF_MAGIC_LEN);
-    buf[4] = SDF_ENVELOPE_VERSION;
-    buf[5] = SDF_ALG_AES_256_GCM;
-    sdf_u32be_write(buf + 6, key_id);
-    memcpy(buf + 10, nonce, SDF_GCM_NONCE_BYTES);
+    memcpy(out, SDF_MAGIC, SDF_MAGIC_LEN);
+    out[4] = SDF_ENVELOPE_VERSION;
+    out[5] = SDF_ALG_AES_256_GCM;
+    sdf_u32be_write(out + 6, key_id);
+    memcpy(out + 10, nonce, SDF_GCM_NONCE_BYTES);
 
     ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
-        free(buf);
         sdf_set_err(err, err_len, "EVP_CIPHER_CTX_new failed");
         return SDF_ERR_CRYPTO;
     }
@@ -132,46 +135,71 @@ sdf_status sdf_encrypt_aes_256_gcm(const unsigned char *plaintext, size_t plaint
         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, SDF_GCM_NONCE_BYTES, NULL) != 1 ||
         EVP_EncryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP AES-256-GCM init failed");
         return SDF_ERR_CRYPTO;
     }
 
     if (aad_len > 0 && EVP_EncryptUpdate(ctx, NULL, &len, aad, (int)aad_len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP AAD update failed");
         return SDF_ERR_CRYPTO;
     }
 
-    if (plaintext_len > 0 &&
-        EVP_EncryptUpdate(ctx, buf + SDF_HEADER_BYTES, &len, plaintext, (int)plaintext_len) != 1) {
+    if (EVP_EncryptUpdate(ctx, out + SDF_HEADER_BYTES, &len, plaintext_len > 0 ? plaintext : out,
+                          (int)plaintext_len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP encrypt update failed");
         return SDF_ERR_CRYPTO;
     }
     total = len;
 
-    if (EVP_EncryptFinal_ex(ctx, buf + SDF_HEADER_BYTES + total, &len) != 1) {
+    if (EVP_EncryptFinal_ex(ctx, out + SDF_HEADER_BYTES + total, &len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP encrypt final failed");
         return SDF_ERR_CRYPTO;
     }
     total += len;
 
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, SDF_GCM_TAG_BYTES,
-                            buf + 10 + SDF_GCM_NONCE_BYTES) != 1) {
+                            out + 10 + SDF_GCM_NONCE_BYTES) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP get tag failed");
         return SDF_ERR_CRYPTO;
     }
 
     EVP_CIPHER_CTX_free(ctx);
-    *out = buf;
     *out_len = SDF_HEADER_BYTES + (size_t)total;
+    return SDF_OK;
+}
+
+sdf_status sdf_encrypt_aes_256_gcm(const unsigned char *plaintext, size_t plaintext_len,
+                                   const unsigned char *key, size_t key_len,
+                                   const unsigned char *aad, size_t aad_len, uint32_t key_id,
+                                   unsigned char **out, size_t *out_len, char *err,
+                                   size_t err_len) {
+    unsigned char *buf;
+    size_t needed;
+    sdf_status st;
+
+    if (!out || !out_len) {
+        sdf_set_err(err, err_len, "invalid encrypt arguments");
+        return SDF_ERR_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    *out_len = 0;
+    needed = sdf_encrypt_aes_256_gcm_output_len(plaintext_len);
+    buf = (unsigned char *)malloc(needed == 0 ? 1 : needed);
+    if (!buf) {
+        sdf_set_err(err, err_len, "malloc failed");
+        return SDF_ERR_NO_MEMORY;
+    }
+    st = sdf_encrypt_aes_256_gcm_into(plaintext, plaintext_len, key, key_len, aad, aad_len, key_id,
+                                      buf, needed, out_len, err, err_len);
+    if (st != SDF_OK) {
+        free(buf);
+        return st;
+    }
+    *out = buf;
     return SDF_OK;
 }
 
@@ -203,25 +231,32 @@ sdf_status sdf_parse_key_id(const unsigned char *envelope, size_t envelope_len, 
     return SDF_OK;
 }
 
-sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelope_len,
-                                   const unsigned char *key, size_t key_len,
-                                   const unsigned char *aad, size_t aad_len, unsigned char **out,
-                                   size_t *out_len, char *err, size_t err_len) {
+size_t sdf_decrypt_aes_256_gcm_output_cap(const unsigned char *envelope, size_t envelope_len) {
+    if (!sdf_is_valid_envelope(envelope, envelope_len))
+        return 0;
+    return envelope_len - SDF_HEADER_BYTES;
+}
+
+sdf_status sdf_decrypt_aes_256_gcm_into(const unsigned char *envelope, size_t envelope_len,
+                                        const unsigned char *key, size_t key_len,
+                                        const unsigned char *aad, size_t aad_len,
+                                        unsigned char *out, size_t out_cap, size_t *out_len,
+                                        char *err, size_t err_len) {
     EVP_CIPHER_CTX *ctx = NULL;
     const unsigned char *nonce;
     const unsigned char *tag;
     const unsigned char *ciphertext;
     size_t ciphertext_len;
-    unsigned char *buf = NULL;
     int len = 0;
     int total = 0;
     int final_ok = 0;
+    unsigned char dummy_out[1];
+    unsigned char *out_ptr = out ? out : dummy_out;
 
-    if (!out || !out_len || !envelope) {
+    if (!out_len || !envelope || (!out && out_cap > 0)) {
         sdf_set_err(err, err_len, "invalid decrypt arguments");
         return SDF_ERR_INVALID_ARGUMENT;
     }
-    *out = NULL;
     *out_len = 0;
     if (sdf_validate_key(key, key_len, err, err_len) != SDF_OK)
         return SDF_ERR_KEY;
@@ -246,16 +281,13 @@ sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelop
         sdf_set_err(err, err_len, "ciphertext too large for OpenSSL EVP int lengths");
         return SDF_ERR_INVALID_ARGUMENT;
     }
-
-    buf = (unsigned char *)malloc(ciphertext_len == 0 ? 1 : ciphertext_len);
-    if (!buf) {
-        sdf_set_err(err, err_len, "malloc failed");
-        return SDF_ERR_NO_MEMORY;
+    if (out_cap < ciphertext_len) {
+        sdf_set_err(err, err_len, "output buffer too small");
+        return SDF_ERR_INVALID_ARGUMENT;
     }
 
     ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
-        free(buf);
         sdf_set_err(err, err_len, "EVP_CIPHER_CTX_new failed");
         return SDF_ERR_CRYPTO;
     }
@@ -264,22 +296,19 @@ sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelop
         EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, SDF_GCM_NONCE_BYTES, NULL) != 1 ||
         EVP_DecryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP AES-256-GCM init failed");
         return SDF_ERR_CRYPTO;
     }
 
     if (aad_len > 0 && EVP_DecryptUpdate(ctx, NULL, &len, aad, (int)aad_len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP AAD update failed");
         return SDF_ERR_CRYPTO;
     }
 
-    if (ciphertext_len > 0 &&
-        EVP_DecryptUpdate(ctx, buf, &len, ciphertext, (int)ciphertext_len) != 1) {
+    if (EVP_DecryptUpdate(ctx, out_ptr, &len, ciphertext_len > 0 ? ciphertext : out_ptr,
+                          (int)ciphertext_len) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP decrypt update failed");
         return SDF_ERR_CRYPTO;
     }
@@ -287,23 +316,57 @@ sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelop
 
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, SDF_GCM_TAG_BYTES, (void *)tag) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        free(buf);
         sdf_set_err(err, err_len, "EVP set tag failed");
         return SDF_ERR_CRYPTO;
     }
 
-    final_ok = EVP_DecryptFinal_ex(ctx, buf + total, &len);
+    final_ok = EVP_DecryptFinal_ex(ctx, out_ptr + total, &len);
     EVP_CIPHER_CTX_free(ctx);
     if (final_ok != 1) {
-        sdf_secure_clear(buf, ciphertext_len == 0 ? 1 : ciphertext_len);
-        free(buf);
+        if (out && out_cap > 0)
+            sdf_secure_clear(out, out_cap);
+        sdf_secure_clear(dummy_out, sizeof(dummy_out));
         sdf_set_err(err, err_len, "authentication failed");
         return SDF_ERR_AUTH;
     }
     total += len;
 
-    *out = buf;
     *out_len = (size_t)total;
+    return SDF_OK;
+}
+
+sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelope_len,
+                                   const unsigned char *key, size_t key_len,
+                                   const unsigned char *aad, size_t aad_len, unsigned char **out,
+                                   size_t *out_len, char *err, size_t err_len) {
+    unsigned char *buf;
+    size_t cap;
+    sdf_status st;
+
+    if (!out || !out_len || !envelope) {
+        sdf_set_err(err, err_len, "invalid decrypt arguments");
+        return SDF_ERR_INVALID_ARGUMENT;
+    }
+    *out = NULL;
+    *out_len = 0;
+    cap = sdf_decrypt_aes_256_gcm_output_cap(envelope, envelope_len);
+    if (cap == 0 && !sdf_is_valid_envelope(envelope, envelope_len)) {
+        sdf_set_err(err, err_len, "invalid MCEN envelope");
+        return SDF_ERR_FORMAT;
+    }
+    buf = (unsigned char *)malloc(cap == 0 ? 1 : cap);
+    if (!buf) {
+        sdf_set_err(err, err_len, "malloc failed");
+        return SDF_ERR_NO_MEMORY;
+    }
+    st = sdf_decrypt_aes_256_gcm_into(envelope, envelope_len, key, key_len, aad, aad_len, buf, cap,
+                                      out_len, err, err_len);
+    if (st != SDF_OK) {
+        sdf_secure_clear(buf, cap == 0 ? 1 : cap);
+        free(buf);
+        return st;
+    }
+    *out = buf;
     return SDF_OK;
 }
 

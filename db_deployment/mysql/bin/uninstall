@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname "$0")/common"
+
+if [ "${CONFIRM:-}" != "REMOVE_SECURE_DB_FIELDS" ]; then
+  echo 'Refusing to uninstall without CONFIRM=REMOVE_SECURE_DB_FIELDS' >&2
+  exit 2
+fi
+mysql_cmd < "$ROOT/sql/uninstall.sql"
+pdir="$(plugin_dir)"
+rm -f "$pdir/$UDF_SO"
+printf 'secure_db_fields mysql UDFs uninstalled\n'

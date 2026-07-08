@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=common
+source "$(dirname "$0")/common"
+
+command -v cc >/dev/null
+command -v make >/dev/null
+command -v mysql >/dev/null
+mysql_cmd -e 'SELECT VERSION();' >/dev/null
+pdir="$(plugin_dir)"
+test -n "$pdir"
+printf 'mysql plugin_dir: %s\n' "$pdir"
+if [ ! -d "$pdir" ]; then
+  echo "plugin_dir does not exist: $pdir" >&2
+  exit 2
+fi
+printf 'secure_db_fields mysql doctor: ok\n'
