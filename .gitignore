@@ -1,0 +1,63 @@
+# Ruby / Bundler
+/.bundle/
+/vendor/bundle/
+/vendor/cache/
+*.gem
+*.rbc
+.ruby-version
+.ruby-gemset
+
+# Build artifacts
+/pkg/
+/tmp/
+/log/
+/coverage/
+/.rspec_status
+
+# Native extension build
+/ext/**/Makefile
+/ext/**/mkmf.log
+/ext/**/*.o
+/ext/**/*.so
+/ext/**/*.bundle
+/ext/**/*.dylib
+/ext/**/conftest*
+/ext/**/siteconf*.rb
+
+# MySQL UDF build artifacts
+/mysql_udf/*.o
+/mysql_udf/*.so
+/mysql_udf/*.dylib
+/mysql_udf/*.bundle
+/mysql_udf/secure_db_fields_udf
+/mysql_udf/build/
+/mysql_udf/tmp/
+
+# Generated keys / secrets
+*.key
+*.pem
+*.env
+.env
+.env.*
+!/examples/*.env.example
+
+# Local key files
+/config/secure_db_fields/keys.json
+/etc/secure_db_fields/keys.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Archives
+*.zip
+*.tar.gz
+*.tgz
+
+# Test scratch
+/test/tmp/
+/spec/tmp/

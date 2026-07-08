@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+make
+plugin_dir="${MYSQL_PLUGIN_DIR:-$(mysql_config --plugindir 2>/dev/null || true)}"
+if [[ -z "${plugin_dir}" ]]; then
+  echo "Set MYSQL_PLUGIN_DIR or install mysql_config" >&2
+  exit 1
+fi
+sudo install -m 0755 secure_db_fields_mysql.so "${plugin_dir}/secure_db_fields_mysql.so"
+mysql ${MYSQL_ARGS:-} < sql/install.sql
