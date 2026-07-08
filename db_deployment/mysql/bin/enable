@@ -1,7 +1,57 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# shellcheck source=common
-source "$(dirname "$0")/common"
 
-mysql_cmd < "$ROOT/sql/install.sql"
-mysql_cmd -e 'SELECT secure_db_fields_version() AS version;'
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MYSQL="${MYSQL:-mysql}"
+DEFAULTS_FILE=""
+MYSQL_SOCKET="${MYSQL_SOCKET:-}"
+
+usage() {
+  cat <<'TEXT'
+Usage: MYSQL_SOCKET=/run/mysqld/mysqld.sock ./bin/enable [--mysql PATH] [--defaults-extra-file PATH]
+
+Registers the SecureDBFields UDFs once. Existing healthy registrations are left
+untouched; this command never drops functions automatically.
+TEXT
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --mysql)
+      [ "$#" -ge 2 ] || { echo '--mysql requires a path' >&2; exit 2; }
+      MYSQL="$2"; shift 2 ;;
+    --defaults-extra-file)
+      [ "$#" -ge 2 ] || { echo '--defaults-extra-file requires a path' >&2; exit 2; }
+      DEFAULTS_FILE="$2"; shift 2 ;;
+    --help|-h)
+      usage; exit 0 ;;
+    *)
+      echo "secure_db_fields mysql enable: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+# shellcheck source=common
+source "$ROOT/bin/common"
+sdf_resolve_mysql
+sdf_mysql_args
+sdf_require_mysql57
+sdf_require_expected_socket
+sdf_read_udf_state
+
+if sdf_state_is_clean_absent; then
+  sdf_register_expected_udfs
+  sdf_read_udf_state
+  sdf_state_is_clean_enabled || sdf_die 'registration did not create the expected UDF state'
+  sdf_smoke_check
+  echo 'SecureDBFields MySQL UDFs are enabled. Apply generated admin-view SQL separately.'
+  exit 0
+fi
+
+if sdf_state_is_clean_enabled; then
+  sdf_smoke_check
+  echo 'SecureDBFields MySQL UDFs are already enabled; no changes made.'
+  exit 0
+fi
+
+sdf_require_clean_owned_state
+sdf_die 'UDF registrations are partial; run make status and resolve the state before enabling'

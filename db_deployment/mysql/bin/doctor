@@ -1,17 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# shellcheck source=common
-source "$(dirname "$0")/common"
 
-command -v cc >/dev/null
-command -v make >/dev/null
-command -v mysql >/dev/null
-mysql_cmd -e 'SELECT VERSION();' >/dev/null
-pdir="$(plugin_dir)"
-test -n "$pdir"
-printf 'mysql plugin_dir: %s\n' "$pdir"
-if [ ! -d "$pdir" ]; then
-  echo "plugin_dir does not exist: $pdir" >&2
-  exit 2
-fi
-printf 'secure_db_fields mysql doctor: ok\n'
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MYSQL="${MYSQL:-mysql}"
+DEFAULTS_FILE=""
+MYSQL_SOCKET="${MYSQL_SOCKET:-}"
+
+usage() {
+  cat <<'TEXT'
+Usage: MYSQL_SOCKET=/run/mysqld/mysqld.sock ./bin/doctor [--mysql PATH] [--defaults-extra-file PATH]
+
+Run this on the MySQL 5.7 host. The bundle uses a local Unix socket so the UDF
+library is installed into the plugin_dir of that same mysqld.
+TEXT
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --mysql)
+      [ "$#" -ge 2 ] || { echo '--mysql requires a path' >&2; exit 2; }
+      MYSQL="$2"; shift 2 ;;
+    --defaults-extra-file)
+      [ "$#" -ge 2 ] || { echo '--defaults-extra-file requires a path' >&2; exit 2; }
+      DEFAULTS_FILE="$2"; shift 2 ;;
+    --help|-h)
+      usage; exit 0 ;;
+    *)
+      echo "secure_db_fields mysql doctor: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+# shellcheck source=common
+source "$ROOT/bin/common"
+sdf_resolve_mysql
+sdf_mysql_args
+command -v make >/dev/null 2>&1 || sdf_die 'make is required'
+command -v cc >/dev/null 2>&1 || sdf_die 'a C compiler is required (cc/gcc/clang)'
+sdf_require_mysql57
+sdf_require_expected_socket
+
+PLUGIN_DIR="$(sdf_plugin_dir)"
+SERVER_SOCKET="$(sdf_server_socket)"
+SERVER_HOSTNAME="$(sdf_server_hostname)"
+[ -n "$PLUGIN_DIR" ] || sdf_die 'MySQL returned an empty @@plugin_dir'
+[ -d "$PLUGIN_DIR" ] || sdf_die "@@plugin_dir is not a local directory: $PLUGIN_DIR"
+
+printf '%s\n' \
+  "MySQL: $(sdf_server_version)" \
+  "mysql client: $MYSQL" \
+  "server hostname: $SERVER_HOSTNAME" \
+  "server socket: $SERVER_SOCKET" \
+  "plugin directory: $PLUGIN_DIR" \
+  "bundle: $ROOT" \
+  'doctor: OK'
