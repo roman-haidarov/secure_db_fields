@@ -4,7 +4,6 @@
 #include <errno.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
-#include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +75,18 @@ static sdf_status sdf_validate_key(const unsigned char *key, size_t key_len, cha
     return SDF_OK;
 }
 
+static int sdf_gcm_ctx_init(EVP_CIPHER_CTX *ctx, const unsigned char *key,
+                            const unsigned char *nonce, int encrypt) {
+    if (encrypt) {
+        return EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) == 1 &&
+               EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, SDF_GCM_NONCE_BYTES, NULL) == 1 &&
+               EVP_EncryptInit_ex(ctx, NULL, NULL, key, nonce) == 1;
+    }
+    return EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) == 1 &&
+           EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, SDF_GCM_NONCE_BYTES, NULL) == 1 &&
+           EVP_DecryptInit_ex(ctx, NULL, NULL, key, nonce) == 1;
+}
+
 size_t sdf_encrypt_aes_256_gcm_output_len(size_t plaintext_len) {
     return SDF_HEADER_BYTES + plaintext_len;
 }
@@ -90,6 +101,8 @@ sdf_status sdf_encrypt_aes_256_gcm_into(const unsigned char *plaintext, size_t p
     int len = 0;
     int total = 0;
     size_t needed;
+    sdf_status st = SDF_OK;
+    const char *msg = NULL;
 
     if (!out || !out_len || (!plaintext && plaintext_len > 0)) {
         sdf_set_err(err, err_len, "invalid encrypt arguments");
@@ -130,49 +143,54 @@ sdf_status sdf_encrypt_aes_256_gcm_into(const unsigned char *plaintext, size_t p
 
     ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
-        sdf_set_err(err, err_len, "EVP_CIPHER_CTX_new failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP_CIPHER_CTX_new failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, SDF_GCM_NONCE_BYTES, NULL) != 1 ||
-        EVP_EncryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP AES-256-GCM init failed");
-        return SDF_ERR_CRYPTO;
+    if (!sdf_gcm_ctx_init(ctx, key, nonce, 1)) {
+        msg = "EVP AES-256-GCM init failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
     if (aad_len > 0 && EVP_EncryptUpdate(ctx, NULL, &len, aad, (int)aad_len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP AAD update failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP AAD update failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
     if (EVP_EncryptUpdate(ctx, out + SDF_HEADER_BYTES, &len, plaintext_len > 0 ? plaintext : out,
                           (int)plaintext_len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP encrypt update failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP encrypt update failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
     total = len;
 
     if (EVP_EncryptFinal_ex(ctx, out + SDF_HEADER_BYTES + total, &len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP encrypt final failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP encrypt final failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
     total += len;
 
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, SDF_GCM_TAG_BYTES,
                             out + 10 + SDF_GCM_NONCE_BYTES) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP get tag failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP get tag failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
-    EVP_CIPHER_CTX_free(ctx);
     *out_len = SDF_HEADER_BYTES + (size_t)total;
-    return SDF_OK;
+
+cleanup:
+    if (ctx)
+        EVP_CIPHER_CTX_free(ctx);
+    sdf_secure_clear(nonce, sizeof(nonce));
+    if (st != SDF_OK)
+        sdf_set_err(err, err_len, msg);
+    return st;
 }
 
 sdf_status sdf_encrypt_aes_256_gcm(const unsigned char *plaintext, size_t plaintext_len,
@@ -255,6 +273,8 @@ sdf_status sdf_decrypt_aes_256_gcm_into(const unsigned char *envelope, size_t en
     int final_ok = 0;
     unsigned char dummy_out[1];
     unsigned char *out_ptr = out ? out : dummy_out;
+    sdf_status st = SDF_OK;
+    const char *msg = NULL;
 
     if (!out_len || !envelope || (!out && out_cap > 0)) {
         sdf_set_err(err, err_len, "invalid decrypt arguments");
@@ -291,51 +311,55 @@ sdf_status sdf_decrypt_aes_256_gcm_into(const unsigned char *envelope, size_t en
 
     ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
-        sdf_set_err(err, err_len, "EVP_CIPHER_CTX_new failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP_CIPHER_CTX_new failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, SDF_GCM_NONCE_BYTES, NULL) != 1 ||
-        EVP_DecryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP AES-256-GCM init failed");
-        return SDF_ERR_CRYPTO;
+    if (!sdf_gcm_ctx_init(ctx, key, nonce, 0)) {
+        msg = "EVP AES-256-GCM init failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
     if (aad_len > 0 && EVP_DecryptUpdate(ctx, NULL, &len, aad, (int)aad_len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP AAD update failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP AAD update failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
     if (EVP_DecryptUpdate(ctx, out_ptr, &len, ciphertext_len > 0 ? ciphertext : out_ptr,
                           (int)ciphertext_len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP decrypt update failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP decrypt update failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
     total = len;
 
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, SDF_GCM_TAG_BYTES, (void *)tag) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        sdf_set_err(err, err_len, "EVP set tag failed");
-        return SDF_ERR_CRYPTO;
+        msg = "EVP set tag failed";
+        st = SDF_ERR_CRYPTO;
+        goto cleanup;
     }
 
     final_ok = EVP_DecryptFinal_ex(ctx, out_ptr + total, &len);
-    EVP_CIPHER_CTX_free(ctx);
     if (final_ok != 1) {
         if (out && out_cap > 0)
             sdf_secure_clear(out, out_cap);
-        sdf_secure_clear(dummy_out, sizeof(dummy_out));
-        sdf_set_err(err, err_len, "authentication failed");
-        return SDF_ERR_AUTH;
+        msg = "authentication failed";
+        st = SDF_ERR_AUTH;
+        goto cleanup;
     }
     total += len;
-
     *out_len = (size_t)total;
-    return SDF_OK;
+
+cleanup:
+    if (ctx)
+        EVP_CIPHER_CTX_free(ctx);
+    sdf_secure_clear(dummy_out, sizeof(dummy_out));
+    if (st != SDF_OK)
+        sdf_set_err(err, err_len, msg);
+    return st;
 }
 
 sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelope_len,
@@ -373,22 +397,101 @@ sdf_status sdf_decrypt_aes_256_gcm(const unsigned char *envelope, size_t envelop
     return SDF_OK;
 }
 
-sdf_status sdf_blind_index(const unsigned char *value, size_t value_len, const unsigned char *key,
-                           size_t key_len, unsigned char out[SDF_BIDX_BYTES], char *err,
-                           size_t err_len) {
-    unsigned int out_len = 0;
-    if ((!value && value_len > 0) || !out) {
-        sdf_set_err(err, err_len, "invalid blind index arguments");
+sdf_status sdf_hmac_sha256_key_prepare(sdf_hmac_sha256_key *prepared, const unsigned char *key,
+                                       size_t key_len, char *err, size_t err_len) {
+    size_t i;
+    unsigned char ipad[SDF_HMAC_SHA256_BLOCK_BYTES];
+    unsigned char opad[SDF_HMAC_SHA256_BLOCK_BYTES];
+
+    if (!prepared) {
+        sdf_set_err(err, err_len, "prepared HMAC key is NULL");
         return SDF_ERR_INVALID_ARGUMENT;
     }
+    memset(prepared, 0, sizeof(*prepared));
     if (sdf_validate_key(key, key_len, err, err_len) != SDF_OK)
         return SDF_ERR_KEY;
-    if (!HMAC(EVP_sha256(), key, (int)key_len, value, value_len, out, &out_len) ||
-        out_len != SDF_BIDX_BYTES) {
+
+    for (i = 0; i < SDF_HMAC_SHA256_BLOCK_BYTES; i++) {
+        ipad[i] = 0x36;
+        opad[i] = 0x5c;
+    }
+    for (i = 0; i < SDF_KEY_BYTES; i++) {
+        ipad[i] ^= key[i];
+        opad[i] ^= key[i];
+    }
+
+    if (SHA256_Init(&prepared->inner0) != 1 ||
+        SHA256_Update(&prepared->inner0, ipad, SDF_HMAC_SHA256_BLOCK_BYTES) != 1 ||
+        SHA256_Init(&prepared->outer0) != 1 ||
+        SHA256_Update(&prepared->outer0, opad, SDF_HMAC_SHA256_BLOCK_BYTES) != 1) {
+        sdf_secure_clear(ipad, sizeof(ipad));
+        sdf_secure_clear(opad, sizeof(opad));
+        sdf_hmac_sha256_key_clear(prepared);
+        sdf_set_err(err, err_len, "SHA256 HMAC prepare failed");
+        return SDF_ERR_CRYPTO;
+    }
+
+    sdf_secure_clear(ipad, sizeof(ipad));
+    sdf_secure_clear(opad, sizeof(opad));
+    return SDF_OK;
+}
+
+sdf_status sdf_hmac_sha256_digest(const sdf_hmac_sha256_key *prepared, const unsigned char *value,
+                                  size_t value_len, unsigned char out[SDF_BIDX_BYTES], char *err,
+                                  size_t err_len) {
+    SHA256_CTX inner_ctx;
+    SHA256_CTX outer_ctx;
+    unsigned char inner[SDF_BIDX_BYTES];
+    int ok;
+
+    if (!prepared || !out || (!value && value_len > 0)) {
+        sdf_set_err(err, err_len, "invalid HMAC digest arguments");
+        return SDF_ERR_INVALID_ARGUMENT;
+    }
+
+    inner_ctx = prepared->inner0;
+    outer_ctx = prepared->outer0;
+    ok = (value_len == 0 || SHA256_Update(&inner_ctx, value, value_len) == 1) &&
+         SHA256_Final(inner, &inner_ctx) == 1 &&
+         SHA256_Update(&outer_ctx, inner, SDF_BIDX_BYTES) == 1 &&
+         SHA256_Final(out, &outer_ctx) == 1;
+
+    sdf_secure_clear(inner, sizeof(inner));
+    sdf_secure_clear(&inner_ctx, sizeof(inner_ctx));
+    sdf_secure_clear(&outer_ctx, sizeof(outer_ctx));
+    if (!ok) {
         sdf_set_err(err, err_len, "HMAC-SHA256 failed");
         return SDF_ERR_CRYPTO;
     }
     return SDF_OK;
+}
+
+void sdf_hmac_sha256_key_clear(sdf_hmac_sha256_key *prepared) {
+    if (prepared)
+        sdf_secure_clear(prepared, sizeof(*prepared));
+}
+
+sdf_status sdf_blind_index_prepared(const unsigned char *value, size_t value_len,
+                                    const sdf_hmac_sha256_key *prepared,
+                                    unsigned char out[SDF_BIDX_BYTES], char *err, size_t err_len) {
+    if ((!value && value_len > 0) || !out || !prepared) {
+        sdf_set_err(err, err_len, "invalid blind index arguments");
+        return SDF_ERR_INVALID_ARGUMENT;
+    }
+    return sdf_hmac_sha256_digest(prepared, value, value_len, out, err, err_len);
+}
+
+sdf_status sdf_blind_index(const unsigned char *value, size_t value_len, const unsigned char *key,
+                           size_t key_len, unsigned char out[SDF_BIDX_BYTES], char *err,
+                           size_t err_len) {
+    sdf_hmac_sha256_key prepared;
+    sdf_status st;
+
+    st = sdf_hmac_sha256_key_prepare(&prepared, key, key_len, err, err_len);
+    if (st == SDF_OK)
+        st = sdf_blind_index_prepared(value, value_len, &prepared, out, err, err_len);
+    sdf_hmac_sha256_key_clear(&prepared);
+    return st;
 }
 
 int sdf_is_canonical_e164(const unsigned char *value, size_t value_len) {
@@ -406,20 +509,35 @@ int sdf_is_canonical_e164(const unsigned char *value, size_t value_len) {
     return 1;
 }
 
-sdf_status sdf_phone_exact_bidx(const unsigned char *e164, size_t e164_len,
-                                const unsigned char *key, size_t key_len,
-                                unsigned char out[SDF_BIDX_BYTES], char *err, size_t err_len) {
+sdf_status sdf_phone_exact_bidx_prepared(const unsigned char *e164, size_t e164_len,
+                                         const sdf_hmac_sha256_key *prepared,
+                                         unsigned char out[SDF_BIDX_BYTES], char *err,
+                                         size_t err_len) {
     if (!sdf_is_canonical_e164(e164, e164_len)) {
         sdf_set_err(err, err_len, "phone must be canonical E.164, e.g. +77771234567");
         return SDF_ERR_INVALID_ARGUMENT;
     }
-    return sdf_blind_index(e164, e164_len, key, key_len, out, err, err_len);
+    return sdf_blind_index_prepared(e164, e164_len, prepared, out, err, err_len);
 }
 
-sdf_status sdf_phone_prefix_bidx(const unsigned char *e164, size_t e164_len,
-                                 unsigned int prefix_digits, const unsigned char *key,
-                                 size_t key_len, unsigned char out[SDF_BIDX_BYTES], char *err,
-                                 size_t err_len) {
+sdf_status sdf_phone_exact_bidx(const unsigned char *e164, size_t e164_len,
+                                const unsigned char *key, size_t key_len,
+                                unsigned char out[SDF_BIDX_BYTES], char *err, size_t err_len) {
+    sdf_hmac_sha256_key prepared;
+    sdf_status st;
+
+    st = sdf_hmac_sha256_key_prepare(&prepared, key, key_len, err, err_len);
+    if (st == SDF_OK)
+        st = sdf_phone_exact_bidx_prepared(e164, e164_len, &prepared, out, err, err_len);
+    sdf_hmac_sha256_key_clear(&prepared);
+    return st;
+}
+
+sdf_status sdf_phone_prefix_bidx_prepared(const unsigned char *e164, size_t e164_len,
+                                          unsigned int prefix_digits,
+                                          const sdf_hmac_sha256_key *prepared,
+                                          unsigned char out[SDF_BIDX_BYTES], char *err,
+                                          size_t err_len) {
     size_t prefix_len;
     if (!sdf_is_canonical_e164(e164, e164_len)) {
         sdf_set_err(err, err_len, "phone must be canonical E.164, e.g. +77771234567");
@@ -434,7 +552,22 @@ sdf_status sdf_phone_prefix_bidx(const unsigned char *e164, size_t e164_len,
         return SDF_ERR_INVALID_ARGUMENT;
     }
     prefix_len = 1 + (size_t)prefix_digits;
-    return sdf_blind_index(e164, prefix_len, key, key_len, out, err, err_len);
+    return sdf_blind_index_prepared(e164, prefix_len, prepared, out, err, err_len);
+}
+
+sdf_status sdf_phone_prefix_bidx(const unsigned char *e164, size_t e164_len,
+                                 unsigned int prefix_digits, const unsigned char *key,
+                                 size_t key_len, unsigned char out[SDF_BIDX_BYTES], char *err,
+                                 size_t err_len) {
+    sdf_hmac_sha256_key prepared;
+    sdf_status st;
+
+    st = sdf_hmac_sha256_key_prepare(&prepared, key, key_len, err, err_len);
+    if (st == SDF_OK)
+        st = sdf_phone_prefix_bidx_prepared(e164, e164_len, prefix_digits, &prepared, out, err,
+                                            err_len);
+    sdf_hmac_sha256_key_clear(&prepared);
+    return st;
 }
 
 static sdf_status sdf_validate_key_file_permissions(const char *path, char *err, size_t err_len) {
@@ -506,50 +639,50 @@ static char *sdf_trim(char *s) {
 
 sdf_status sdf_load_key_from_env_file(const char *path, const char *name,
                                       unsigned char out[SDF_KEY_BYTES], char *err, size_t err_len) {
-    FILE *fp;
+    FILE *fp = NULL;
     char line[SDF_MAX_KEY_LINE];
-    size_t name_len;
     const char *effective_path = path && path[0] ? path : SDF_DEFAULT_KEY_FILE;
+    sdf_status st = SDF_ERR_KEY;
+
+    memset(line, 0, sizeof(line));
     if (!name || !out) {
         sdf_set_err(err, err_len, "invalid key lookup arguments");
         return SDF_ERR_INVALID_ARGUMENT;
     }
     if (sdf_validate_key_file_permissions(effective_path, err, err_len) != SDF_OK)
         return SDF_ERR_KEY;
+
     fp = fopen(effective_path, "r");
     if (!fp) {
         sdf_set_err2(err, err_len, "cannot open key file: ", effective_path);
         return SDF_ERR_KEY;
     }
-    name_len = strlen(name);
+
     while (fgets(line, sizeof(line), fp)) {
         char *p = sdf_trim(line);
         char *eq;
-        if (*p == '\0' || *p == '#') {
-            sdf_secure_clear(line, sizeof(line));
-            continue;
-        }
+        if (*p == '\0' || *p == '#')
+            goto next_line;
         eq = strchr(p, '=');
-        if (!eq) {
-            sdf_secure_clear(line, sizeof(line));
-            continue;
-        }
+        if (!eq)
+            goto next_line;
         *eq = '\0';
         if (strcmp(sdf_trim(p), name) == 0) {
             char *value = sdf_trim(eq + 1);
-            sdf_status st;
-            (void)name_len;
             st = sdf_hex_decode_32(value, out, err, err_len);
-            sdf_secure_clear(line, sizeof(line));
-            fclose(fp);
-            return st;
+            goto done;
         }
+    next_line:
         sdf_secure_clear(line, sizeof(line));
     }
-    sdf_secure_clear(line, sizeof(line));
-    fclose(fp);
+
     sdf_set_err2(err, err_len, "key not found in key file: ", name);
-    return SDF_ERR_KEY;
+
+done:
+    sdf_secure_clear(line, sizeof(line));
+    if (fp)
+        fclose(fp);
+    return st;
 }
 
 sdf_status sdf_load_encryption_key(uint32_t key_id, const char *path,

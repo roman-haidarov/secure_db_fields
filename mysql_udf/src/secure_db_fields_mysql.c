@@ -33,8 +33,10 @@ typedef struct {
     uint32_t enc_key_id;
     unsigned char enc_key[SDF_KEY_BYTES];
     int bidx_key_valid;
+    int bidx_prepared_valid;
     char bidx_domain[128];
     unsigned char bidx_key[SDF_KEY_BYTES];
+    sdf_hmac_sha256_key bidx_prepared;
 } sdf_mysql_state;
 
 static const char *sdf_mysql_key_file(void) {
@@ -66,37 +68,59 @@ static void sdf_mysql_state_free(sdf_mysql_state *state) {
     }
     if (state->enc_key_valid)
         sdf_secure_clear(state->enc_key, sizeof(state->enc_key));
+    if (state->bidx_prepared_valid)
+        sdf_hmac_sha256_key_clear(&state->bidx_prepared);
     if (state->bidx_key_valid)
         sdf_secure_clear(state->bidx_key, sizeof(state->bidx_key));
     free(state);
 }
 
-static int sdf_mysql_ensure_out(sdf_mysql_state *state, unsigned long need) {
+static int sdf_mysql_ensure(char **buf, unsigned long *cap, unsigned long need) {
     char *next;
     if (need == 0)
         need = 1;
-    if (state->out_cap >= need)
+    if (*cap >= need)
         return 1;
-    next = (char *)realloc(state->out, need);
+    next = (char *)realloc(*buf, need);
     if (!next)
         return 0;
-    state->out = next;
-    state->out_cap = need;
+    *buf = next;
+    *cap = need;
     return 1;
 }
 
+static int sdf_mysql_ensure_out(sdf_mysql_state *state, unsigned long need) {
+    return sdf_mysql_ensure(&state->out, &state->out_cap, need);
+}
+
 static int sdf_mysql_ensure_scratch(sdf_mysql_state *state, unsigned long need) {
-    char *next;
-    if (need == 0)
-        need = 1;
-    if (state->scratch_cap >= need)
-        return 1;
-    next = (char *)realloc(state->scratch, need);
-    if (!next)
-        return 0;
-    state->scratch = next;
-    state->scratch_cap = need;
-    return 1;
+    return sdf_mysql_ensure(&state->scratch, &state->scratch_cap, need);
+}
+
+static char *sdf_udf_fail(sdf_status st, char *is_null, char *error) {
+    *is_null = 1;
+    if (st == SDF_ERR_KEY)
+        *error = 1;
+    return NULL;
+}
+
+static char *sdf_udf_nomem(char *is_null, char *error) {
+    *is_null = 1;
+    *error = 1;
+    return NULL;
+}
+
+static char *sdf_udf_return_bidx(sdf_mysql_state *state, sdf_status st,
+                                 const unsigned char out[SDF_BIDX_BYTES], unsigned long *length,
+                                 char *is_null, char *error) {
+    if (st != SDF_OK)
+        return sdf_udf_fail(st, is_null, error);
+    if (!sdf_mysql_ensure_out(state, SDF_BIDX_BYTES))
+        return sdf_udf_nomem(is_null, error);
+    memcpy(state->out, out, SDF_BIDX_BYTES);
+    *length = SDF_BIDX_BYTES;
+    *is_null = 0;
+    return state->out;
 }
 
 static sdf_status sdf_mysql_cached_encryption_key(sdf_mysql_state *state, uint32_t key_id,
@@ -124,23 +148,37 @@ static sdf_status sdf_mysql_cached_bidx_key(sdf_mysql_state *state, const char *
         snprintf(err, err_len, "bidx domain is too long");
         return SDF_ERR_KEY;
     }
-    if (state->bidx_key_valid && strcmp(state->bidx_domain, effective_domain) == 0)
+    if (state->bidx_key_valid && state->bidx_prepared_valid &&
+        strcmp(state->bidx_domain, effective_domain) == 0)
         return SDF_OK;
+    if (state->bidx_prepared_valid) {
+        sdf_hmac_sha256_key_clear(&state->bidx_prepared);
+        state->bidx_prepared_valid = 0;
+    }
     if (state->bidx_key_valid) {
         sdf_secure_clear(state->bidx_key, sizeof(state->bidx_key));
         state->bidx_key_valid = 0;
     }
     st = sdf_load_bidx_key(sdf_mysql_key_file(), effective_domain, state->bidx_key, err, err_len);
+    if (st == SDF_OK)
+        st = sdf_hmac_sha256_key_prepare(&state->bidx_prepared, state->bidx_key,
+                                         sizeof(state->bidx_key), err, err_len);
     if (st == SDF_OK) {
         snprintf(state->bidx_domain, sizeof(state->bidx_domain), "%s", effective_domain);
         state->bidx_key_valid = 1;
+        state->bidx_prepared_valid = 1;
+    } else {
+        sdf_secure_clear(state->bidx_key, sizeof(state->bidx_key));
+        state->bidx_key_valid = 0;
+        state->bidx_prepared_valid = 0;
     }
     return st;
 }
 
-static sdf_udf_init_result_t sdf_init_state(UDF_INIT *initid, UDF_ARGS *args, char *message,
-                                            unsigned int argc, const char *signature,
-                                            unsigned long max_length) {
+static sdf_udf_init_result_t sdf_init_state_typed(UDF_INIT *initid, UDF_ARGS *args, char *message,
+                                                  unsigned int argc, const char *signature,
+                                                  unsigned long max_length,
+                                                  const enum Item_result *types) {
     unsigned int i;
     sdf_mysql_state *state;
     if (args->arg_count != argc) {
@@ -148,7 +186,7 @@ static sdf_udf_init_result_t sdf_init_state(UDF_INIT *initid, UDF_ARGS *args, ch
         return 1;
     }
     for (i = 0; i < argc; i++)
-        args->arg_type[i] = STRING_RESULT;
+        args->arg_type[i] = types ? types[i] : STRING_RESULT;
     state = sdf_mysql_state_new();
     if (!state) {
         snprintf(message, 255, "out of memory");
@@ -159,6 +197,12 @@ static sdf_udf_init_result_t sdf_init_state(UDF_INIT *initid, UDF_ARGS *args, ch
     initid->const_item = 0;
     initid->max_length = max_length;
     return 0;
+}
+
+static sdf_udf_init_result_t sdf_init_state(UDF_INIT *initid, UDF_ARGS *args, char *message,
+                                            unsigned int argc, const char *signature,
+                                            unsigned long max_length) {
+    return sdf_init_state_typed(initid, args, message, argc, signature, max_length, NULL);
 }
 
 static sdf_udf_init_result_t sdf_init_no_state(UDF_INIT *initid, UDF_ARGS *args, char *message,
@@ -178,6 +222,11 @@ void secure_db_fields_deinit(UDF_INIT *initid) {
     sdf_mysql_state_free((sdf_mysql_state *)initid->ptr);
     initid->ptr = NULL;
 }
+
+#define SDF_UDF_DEINIT(name)               \
+    void name##_deinit(UDF_INIT *initid) { \
+        secure_db_fields_deinit(initid);   \
+    }
 
 sdf_udf_init_result_t secure_db_fields_version_init(UDF_INIT *initid, UDF_ARGS *args,
                                                     char *message) {
@@ -258,7 +307,7 @@ sdf_udf_init_result_t secure_db_fields_decrypt_init(UDF_INIT *initid, UDF_ARGS *
 char *secure_db_fields_decrypt(UDF_INIT *initid, UDF_ARGS *args, char *result,
                                unsigned long *length, char *is_null, char *error) {
     sdf_mysql_state *state = (sdf_mysql_state *)initid->ptr;
-    unsigned char *out = NULL;
+    size_t out_cap;
     size_t out_len = 0;
     uint32_t key_id = 0;
     char err[SDF_MAX_ERR];
@@ -271,43 +320,27 @@ char *secure_db_fields_decrypt(UDF_INIT *initid, UDF_ARGS *args, char *result,
     }
     st = sdf_parse_key_id((const unsigned char *)args->args[0], (size_t)args->lengths[0], &key_id,
                           err, sizeof(err));
-    if (st != SDF_OK) {
-        *is_null = 1;
-        return NULL;
-    }
+    if (st != SDF_OK)
+        return sdf_udf_fail(st, is_null, error);
     st = sdf_mysql_cached_encryption_key(state, key_id, err, sizeof(err));
-    if (st != SDF_OK) {
-        if (st == SDF_ERR_KEY)
-            *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    st = sdf_decrypt_aes_256_gcm((const unsigned char *)args->args[0], (size_t)args->lengths[0],
-                                 state->enc_key, sizeof(state->enc_key),
-                                 (const unsigned char *)args->args[1], (size_t)args->lengths[1],
-                                 &out, &out_len, err, sizeof(err));
-    if (st != SDF_OK) {
-        *is_null = 1;
-        return NULL;
-    }
-    if (!sdf_mysql_ensure_out(state, (unsigned long)out_len)) {
-        sdf_secure_clear(out, out_len);
-        free(out);
-        *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    memcpy(state->out, out, out_len);
-    sdf_secure_clear(out, out_len);
-    free(out);
+    if (st != SDF_OK)
+        return sdf_udf_fail(st, is_null, error);
+    out_cap = sdf_decrypt_aes_256_gcm_output_cap((const unsigned char *)args->args[0],
+                                                 (size_t)args->lengths[0]);
+    if (!sdf_mysql_ensure_out(state, (unsigned long)out_cap))
+        return sdf_udf_nomem(is_null, error);
+    st = sdf_decrypt_aes_256_gcm_into(
+        (const unsigned char *)args->args[0], (size_t)args->lengths[0], state->enc_key,
+        sizeof(state->enc_key), (const unsigned char *)args->args[1], (size_t)args->lengths[1],
+        (unsigned char *)state->out, out_cap, &out_len, err, sizeof(err));
+    if (st != SDF_OK)
+        return sdf_udf_fail(st, is_null, error);
     *length = (unsigned long)out_len;
     *is_null = 0;
     return state->out;
 }
 
-void secure_db_fields_decrypt_deinit(UDF_INIT *initid) {
-    secure_db_fields_deinit(initid);
-}
+SDF_UDF_DEINIT(secure_db_fields_decrypt)
 
 sdf_udf_init_result_t secure_db_fields_decrypt_field_init(UDF_INIT *initid, UDF_ARGS *args,
                                                           char *message) {
@@ -336,11 +369,8 @@ char *secure_db_fields_decrypt_field(UDF_INIT *initid, UDF_ARGS *args, char *res
         return NULL;
     }
     aad_len = 4 + 4 + args->lengths[1] + 4 + args->lengths[2] + SDF_ROW_UID_BYTES;
-    if (!sdf_mysql_ensure_scratch(state, aad_len)) {
-        *is_null = 1;
-        *error = 1;
-        return NULL;
-    }
+    if (!sdf_mysql_ensure_scratch(state, aad_len))
+        return sdf_udf_nomem(is_null, error);
     aad = state->scratch;
     memcpy(aad, "SDF1", 4);
     sdf_mysql_u32be_write(aad + 4, (uint32_t)args->lengths[1]);
@@ -350,7 +380,7 @@ char *secure_db_fields_decrypt_field(UDF_INIT *initid, UDF_ARGS *args, char *res
     memcpy(aad + 12 + args->lengths[1] + args->lengths[2], args->args[3], SDF_ROW_UID_BYTES);
 
     {
-        unsigned char *out = NULL;
+        size_t out_cap;
         size_t out_len = 0;
         uint32_t key_id = 0;
         char err[SDF_MAX_ERR];
@@ -358,28 +388,18 @@ char *secure_db_fields_decrypt_field(UDF_INIT *initid, UDF_ARGS *args, char *res
                                          (size_t)args->lengths[0], &key_id, err, sizeof(err));
         if (st == SDF_OK)
             st = sdf_mysql_cached_encryption_key(state, key_id, err, sizeof(err));
-        if (st == SDF_OK) {
-            st = sdf_decrypt_aes_256_gcm((const unsigned char *)args->args[0],
-                                         (size_t)args->lengths[0], state->enc_key,
-                                         sizeof(state->enc_key), (const unsigned char *)aad,
-                                         (size_t)aad_len, &out, &out_len, err, sizeof(err));
-        }
-        if (st != SDF_OK) {
-            *is_null = 1;
-            if (st == SDF_ERR_KEY)
-                *error = 1;
-            return NULL;
-        }
-        if (!sdf_mysql_ensure_out(state, (unsigned long)out_len)) {
-            sdf_secure_clear(out, out_len);
-            free(out);
-            *is_null = 1;
-            *error = 1;
-            return NULL;
-        }
-        memcpy(state->out, out, out_len);
-        sdf_secure_clear(out, out_len);
-        free(out);
+        if (st != SDF_OK)
+            return sdf_udf_fail(st, is_null, error);
+        out_cap = sdf_decrypt_aes_256_gcm_output_cap((const unsigned char *)args->args[0],
+                                                     (size_t)args->lengths[0]);
+        if (!sdf_mysql_ensure_out(state, (unsigned long)out_cap))
+            return sdf_udf_nomem(is_null, error);
+        st = sdf_decrypt_aes_256_gcm_into(
+            (const unsigned char *)args->args[0], (size_t)args->lengths[0], state->enc_key,
+            sizeof(state->enc_key), (const unsigned char *)aad, (size_t)aad_len,
+            (unsigned char *)state->out, out_cap, &out_len, err, sizeof(err));
+        if (st != SDF_OK)
+            return sdf_udf_fail(st, is_null, error);
         *length = (unsigned long)out_len;
         *is_null = 0;
         *error = 0;
@@ -387,9 +407,7 @@ char *secure_db_fields_decrypt_field(UDF_INIT *initid, UDF_ARGS *args, char *res
     }
 }
 
-void secure_db_fields_decrypt_field_deinit(UDF_INIT *initid) {
-    secure_db_fields_deinit(initid);
-}
+SDF_UDF_DEINIT(secure_db_fields_decrypt_field)
 
 sdf_udf_init_result_t secure_db_fields_bidx_init(UDF_INIT *initid, UDF_ARGS *args, char *message) {
     return sdf_init_state(initid, args, message, 2, "secure_db_fields_bidx(value, domain)",
@@ -417,29 +435,14 @@ char *secure_db_fields_bidx(UDF_INIT *initid, UDF_ARGS *args, char *result, unsi
     domain[args->lengths[1]] = '\0';
     st = sdf_mysql_cached_bidx_key(state, domain, err, sizeof(err));
     if (st == SDF_OK) {
-        st = sdf_blind_index((const unsigned char *)args->args[0], (size_t)args->lengths[0],
-                             state->bidx_key, sizeof(state->bidx_key), out, err, sizeof(err));
+        st =
+            sdf_blind_index_prepared((const unsigned char *)args->args[0], (size_t)args->lengths[0],
+                                     &state->bidx_prepared, out, err, sizeof(err));
     }
-    if (st != SDF_OK) {
-        if (st == SDF_ERR_KEY)
-            *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    if (!sdf_mysql_ensure_out(state, SDF_BIDX_BYTES)) {
-        *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    memcpy(state->out, out, SDF_BIDX_BYTES);
-    *length = SDF_BIDX_BYTES;
-    *is_null = 0;
-    return state->out;
+    return sdf_udf_return_bidx(state, st, out, length, is_null, error);
 }
 
-void secure_db_fields_bidx_deinit(UDF_INIT *initid) {
-    secure_db_fields_deinit(initid);
-}
+SDF_UDF_DEINIT(secure_db_fields_bidx)
 
 sdf_udf_init_result_t secure_phone_bidx_init(UDF_INIT *initid, UDF_ARGS *args, char *message) {
     return sdf_init_state(initid, args, message, 1, "secure_phone_bidx(e164)", SDF_BIDX_BYTES);
@@ -459,50 +462,21 @@ char *secure_phone_bidx(UDF_INIT *initid, UDF_ARGS *args, char *result, unsigned
     }
     st = sdf_mysql_cached_bidx_key(state, "PHONE", err, sizeof(err));
     if (st == SDF_OK) {
-        st = sdf_phone_exact_bidx((const unsigned char *)args->args[0], (size_t)args->lengths[0],
-                                  state->bidx_key, sizeof(state->bidx_key), out, err, sizeof(err));
+        st = sdf_phone_exact_bidx_prepared((const unsigned char *)args->args[0],
+                                           (size_t)args->lengths[0], &state->bidx_prepared, out,
+                                           err, sizeof(err));
     }
-    if (st != SDF_OK) {
-        if (st == SDF_ERR_KEY)
-            *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    if (!sdf_mysql_ensure_out(state, SDF_BIDX_BYTES)) {
-        *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    memcpy(state->out, out, SDF_BIDX_BYTES);
-    *length = SDF_BIDX_BYTES;
-    *is_null = 0;
-    return state->out;
+    return sdf_udf_return_bidx(state, st, out, length, is_null, error);
 }
 
-void secure_phone_bidx_deinit(UDF_INIT *initid) {
-    secure_db_fields_deinit(initid);
-}
+SDF_UDF_DEINIT(secure_phone_bidx)
 
 sdf_udf_init_result_t secure_phone_prefix_bidx_init(UDF_INIT *initid, UDF_ARGS *args,
                                                     char *message) {
-    sdf_mysql_state *state;
-    if (args->arg_count != 2) {
-        snprintf(message, 255,
-                 "secure_phone_prefix_bidx(e164, prefix_digits) takes exactly 2 arguments");
-        return 1;
-    }
-    args->arg_type[0] = STRING_RESULT;
-    args->arg_type[1] = INT_RESULT;
-    state = sdf_mysql_state_new();
-    if (!state) {
-        snprintf(message, 255, "out of memory");
-        return 1;
-    }
-    initid->ptr = (char *)state;
-    initid->maybe_null = 1;
-    initid->const_item = 0;
-    initid->max_length = SDF_BIDX_BYTES;
-    return 0;
+    static const enum Item_result types[2] = {STRING_RESULT, INT_RESULT};
+    return sdf_init_state_typed(initid, args, message, 2,
+                                "secure_phone_prefix_bidx(e164, prefix_digits)", SDF_BIDX_BYTES,
+                                types);
 }
 
 char *secure_phone_prefix_bidx(UDF_INIT *initid, UDF_ARGS *args, char *result,
@@ -529,27 +503,11 @@ char *secure_phone_prefix_bidx(UDF_INIT *initid, UDF_ARGS *args, char *result,
     snprintf(domain, sizeof(domain), "PHONE_P%u", prefix_digits);
     st = sdf_mysql_cached_bidx_key(state, domain, err, sizeof(err));
     if (st == SDF_OK) {
-        st = sdf_phone_prefix_bidx((const unsigned char *)args->args[0], (size_t)args->lengths[0],
-                                   prefix_digits, state->bidx_key, sizeof(state->bidx_key), out,
-                                   err, sizeof(err));
+        st = sdf_phone_prefix_bidx_prepared((const unsigned char *)args->args[0],
+                                            (size_t)args->lengths[0], prefix_digits,
+                                            &state->bidx_prepared, out, err, sizeof(err));
     }
-    if (st != SDF_OK) {
-        if (st == SDF_ERR_KEY)
-            *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    if (!sdf_mysql_ensure_out(state, SDF_BIDX_BYTES)) {
-        *error = 1;
-        *is_null = 1;
-        return NULL;
-    }
-    memcpy(state->out, out, SDF_BIDX_BYTES);
-    *length = SDF_BIDX_BYTES;
-    *is_null = 0;
-    return state->out;
+    return sdf_udf_return_bidx(state, st, out, length, is_null, error);
 }
 
-void secure_phone_prefix_bidx_deinit(UDF_INIT *initid) {
-    secure_db_fields_deinit(initid);
-}
+SDF_UDF_DEINIT(secure_phone_prefix_bidx)

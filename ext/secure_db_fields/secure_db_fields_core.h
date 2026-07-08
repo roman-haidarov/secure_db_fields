@@ -4,6 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef OPENSSL_SUPPRESS_DEPRECATED
+#define OPENSSL_SUPPRESS_DEPRECATED 1
+#endif
+#include <openssl/sha.h>
+
 #define SDF_VERSION "0.1.1"
 
 #define SDF_MAGIC            "MCEN"
@@ -19,10 +24,16 @@
 #define SDF_MAX_ERR          256
 #define SDF_MAX_KEY_LINE     512
 #define SDF_DEFAULT_KEY_FILE "/etc/secure_db_fields/keys.env"
+#define SDF_HMAC_SHA256_BLOCK_BYTES 64
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct {
+    SHA256_CTX inner0;
+    SHA256_CTX outer0;
+} sdf_hmac_sha256_key;
 
 typedef enum {
     SDF_OK = 0,
@@ -69,15 +80,39 @@ sdf_status sdf_parse_key_id(const unsigned char *envelope, size_t envelope_len, 
 
 int sdf_is_valid_envelope(const unsigned char *envelope, size_t envelope_len);
 
+sdf_status sdf_hmac_sha256_key_prepare(sdf_hmac_sha256_key *prepared, const unsigned char *key,
+                                       size_t key_len, char *err, size_t err_len);
+
+sdf_status sdf_hmac_sha256_digest(const sdf_hmac_sha256_key *prepared, const unsigned char *value,
+                                  size_t value_len, unsigned char out[SDF_BIDX_BYTES], char *err,
+                                  size_t err_len);
+
+void sdf_hmac_sha256_key_clear(sdf_hmac_sha256_key *prepared);
+
+sdf_status sdf_blind_index_prepared(const unsigned char *value, size_t value_len,
+                                    const sdf_hmac_sha256_key *prepared,
+                                    unsigned char out[SDF_BIDX_BYTES], char *err, size_t err_len);
+
 sdf_status sdf_blind_index(const unsigned char *value, size_t value_len, const unsigned char *key,
                            size_t key_len, unsigned char out[SDF_BIDX_BYTES], char *err,
                            size_t err_len);
 
 int sdf_is_canonical_e164(const unsigned char *value, size_t value_len);
 
+sdf_status sdf_phone_exact_bidx_prepared(const unsigned char *e164, size_t e164_len,
+                                         const sdf_hmac_sha256_key *prepared,
+                                         unsigned char out[SDF_BIDX_BYTES], char *err,
+                                         size_t err_len);
+
 sdf_status sdf_phone_exact_bidx(const unsigned char *e164, size_t e164_len,
                                 const unsigned char *key, size_t key_len,
                                 unsigned char out[SDF_BIDX_BYTES], char *err, size_t err_len);
+
+sdf_status sdf_phone_prefix_bidx_prepared(const unsigned char *e164, size_t e164_len,
+                                          unsigned int prefix_digits,
+                                          const sdf_hmac_sha256_key *prepared,
+                                          unsigned char out[SDF_BIDX_BYTES], char *err,
+                                          size_t err_len);
 
 sdf_status sdf_phone_prefix_bidx(const unsigned char *e164, size_t e164_len,
                                  unsigned int prefix_digits, const unsigned char *key,
