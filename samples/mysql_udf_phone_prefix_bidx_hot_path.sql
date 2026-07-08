@@ -1,14 +1,3 @@
--- MySQL 5.7 UDF hot-path sample for prefix phone blind indexes.
--- Console 1:
---   mysql <database> < samples/mysql_udf_phone_prefix_bidx_hot_path.sql
---   CALL sdf_phone_prefix_bidx_hot_loop(500000, 7);
--- Console 2:
---   sample $(pgrep -n mysqld) 35 -f /tmp/secure_db_fields_mysql_phone_prefix_bidx.sample
---   filtercalltree /tmp/secure_db_fields_mysql_phone_prefix_bidx.sample | grep -E 'secure_phone_prefix_bidx|sdf_phone_prefix_bidx|sdf_is_canonical_e164|sdf_blind_index|HMAC|SHA256|EVP_sha256|sdf_load_bidx_key|sdf_load_key_from_env_file' | head -260
---
--- Expected hot C path:
---   secure_phone_prefix_bidx -> sdf_load_bidx_key(domain PHONE_PN)
---   -> sdf_phone_prefix_bidx -> sdf_is_canonical_e164 -> sdf_blind_index -> HMAC-SHA256
 
 DROP PROCEDURE IF EXISTS sdf_phone_prefix_bidx_hot_loop;
 DELIMITER //

@@ -113,7 +113,6 @@ puts "ENC_HEX=#{envelope.unpack1("H*")}"
 puts "BIDX_HEX=#{SecureDBFields::Crypto.phone_blind_index(phone, key: phone_key).unpack1("H*")}"
 puts "P7_HEX=#{SecureDBFields::Crypto.phone_prefix_blind_index(phone, prefix_digits: 7, key: p7_key).unpack1("H*")}"
 RUBY
-  # shellcheck source=/dev/null
   source "$TMPDIR/fixture.env"
   cat > "$TMPDIR/app.sql" <<SQL
 DROP DATABASE IF EXISTS app;

@@ -1,11 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for:
-#   SecureDBFields::Crypto.decrypt(envelope, key:, aad:)
-#
-# Run:
-#   bundle exec ruby samples/ruby_decrypt_hot_path.rb
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_decrypt_hot_path"

@@ -38,22 +38,32 @@ module SecureDBFields
     end
 
     def fetch_hex_key(name)
-      hex = @values[name]
-      hex && Crypto.hex_decode_key(hex)
+      @values[name]
     end
 
     def parse_file(path)
+      validate_file_permissions!(path)
       values = {}
       File.readlines(path, chomp: true).each do |line|
         stripped = line.strip
         next if stripped.empty? || stripped.start_with?("#")
         key, value = stripped.split("=", 2)
         next unless key && value
-        values[key.strip] = value.strip
+        name = key.strip
+        text = value.strip
+        values[name] = name.end_with?("_HEX") ? Crypto.hex_decode_key(text) : text
       end
       values.freeze
     rescue Errno::ENOENT
       raise KeyError, "key file not found: #{path}"
+    end
+
+    def validate_file_permissions!(path)
+      info = File.lstat(path)
+      raise KeyError, "key file must not be a symlink: #{path}" if info.symlink?
+      stat = File.stat(path)
+      raise KeyError, "key file must be a regular file: #{path}" unless stat.file?
+      raise KeyError, "key file permissions are too open: #{path}" unless (stat.mode & 0o027).zero?
     end
   end
 end

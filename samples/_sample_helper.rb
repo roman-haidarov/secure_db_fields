@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-# Shared helpers for SecureDBFields native hot-path samples.
-# These files are intentionally dependency-light and Ruby 2.7.1 compatible.
-
 $stdout.sync = true
 $stderr.sync = true
 

@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for batch encryption:
-#   SecureDBFields::Crypto.encrypt_many(values, key:, aads:, key_id:)
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_encrypt_many_hot_path"

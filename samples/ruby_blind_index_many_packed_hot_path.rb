@@ -1,11 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for packed batch generic blind indexes:
-#   SecureDBFields::Crypto.blind_index_many_packed(values, key:)
-#
-# It returns one binary String with N concatenated 32-byte digests, avoiding
-# Array + per-digest String allocation in backfill pipelines.
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_blind_index_many_packed_hot_path"

@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?= -O2 -fPIC -Wall -Wextra -std=c99
+CFLAGS ?= -O2 -fPIC -Wall -Wextra -Wformat -Wformat-security -fstack-protector-strong -D_FORTIFY_SOURCE=2 -std=c99
 LDFLAGS ?= -shared
 LIBS ?= -lcrypto
 MYSQL_CFLAGS ?= $(shell mysql_config --cflags 2>/dev/null)

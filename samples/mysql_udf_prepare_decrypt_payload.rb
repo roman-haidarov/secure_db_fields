@@ -1,15 +1,5 @@
 # frozen_string_literal: true
 
-# Generates a SQL payload for mysql_udf_decrypt_hot_path.sql.
-# The MySQL UDF key file must contain the same SDF_ENC_KEY_HEX value.
-#
-# Run from project root:
-#   bundle exec ruby samples/mysql_udf_prepare_decrypt_payload.rb
-# Then in mysql console:
-#   source /tmp/secure_db_fields_mysql_decrypt_payload.sql;
-#   source samples/mysql_udf_decrypt_hot_path.sql;
-#   CALL sdf_decrypt_hot_loop(500000);
-
 require_relative "_sample_helper"
 
 key = SDFSample::DEFAULT_ENC_KEY

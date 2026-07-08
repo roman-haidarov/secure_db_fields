@@ -1,11 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for canonical E.164 prefix phone search tokens:
-#   SecureDBFields::Crypto.phone_prefix_blind_index(e164, prefix_digits:, key:)
-#
-# Run:
-#   PREFIX_DIGITS=7 bundle exec ruby samples/ruby_phone_prefix_bidx_hot_path.rb
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_phone_prefix_bidx_hot_path"

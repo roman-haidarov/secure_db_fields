@@ -1,13 +1,5 @@
 # frozen_string_literal: true
 
-# Combined native hot-path sample for per-row write+read:
-#   encrypt(value) + decrypt(envelope)
-# This is intentionally less focused than the single-operation samples, but it
-# is useful when profiling total wrapper overhead and allocation pressure.
-#
-# Run:
-#   bundle exec ruby samples/ruby_roundtrip_hot_path.rb
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_roundtrip_hot_path"

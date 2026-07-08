@@ -1,5 +1,3 @@
--- secure_db_fields MySQL 5.7 UDF install script.
--- Copy secure_db_fields_mysql.so into plugin_dir before running.
 
 DROP FUNCTION IF EXISTS secure_db_fields_version;
 DROP FUNCTION IF EXISTS secure_db_fields_is_valid_envelope;

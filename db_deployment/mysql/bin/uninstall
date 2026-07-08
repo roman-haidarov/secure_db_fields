@@ -32,7 +32,6 @@ done
 
 [ "${EUID:-$(id -u)}" -eq 0 ] || { echo 'secure_db_fields mysql uninstall: run as root' >&2; exit 2; }
 
-# shellcheck source=common
 source "$ROOT/bin/common"
 sdf_resolve_mysql
 sdf_mysql_args

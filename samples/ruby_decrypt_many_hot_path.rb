@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for batch decryption:
-#   SecureDBFields::Crypto.decrypt_many(envelopes, key:, aads:)
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_decrypt_many_hot_path"
