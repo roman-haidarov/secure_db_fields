@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for packed batch phone exact blind indexes:
-#   SecureDBFields::Crypto.phone_blind_index_many_packed(e164_values, key:)
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_phone_exact_bidx_many_packed_hot_path"

@@ -30,7 +30,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# shellcheck source=common
 source "$ROOT/bin/common"
 sdf_resolve_mysql
 sdf_mysql_args
@@ -44,6 +43,9 @@ SERVER_SOCKET="$(sdf_server_socket)"
 SERVER_HOSTNAME="$(sdf_server_hostname)"
 [ -n "$PLUGIN_DIR" ] || sdf_die 'MySQL returned an empty @@plugin_dir'
 [ -d "$PLUGIN_DIR" ] || sdf_die "@@plugin_dir is not a local directory: $PLUGIN_DIR"
+if [ -e "$SDF_KEY_FILE" ]; then
+  sdf_check_key_file_permissions "$SDF_KEY_FILE"
+fi
 
 printf '%s\n' \
   "MySQL: $(sdf_server_version)" \

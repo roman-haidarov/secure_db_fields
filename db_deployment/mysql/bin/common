@@ -11,6 +11,7 @@ SDF_UDF_NAMES=(
   secure_phone_bidx
   secure_phone_prefix_bidx
 )
+SDF_KEY_FILE="${SECURE_DB_FIELDS_KEY_FILE:-/etc/secure_db_fields/keys.env}"
 
 sdf_die() {
   echo "secure_db_fields mysql: $*" >&2
@@ -168,10 +169,31 @@ sdf_library_checksum() {
   fi
 }
 
+sdf_check_key_file_permissions() {
+  local file="${1:-$SDF_KEY_FILE}"
+  local mode
+  [ -f "$file" ] || sdf_die "key file does not exist: $file"
+  mode="$(stat -c '%a' "$file" 2>/dev/null || true)"
+  [ -n "$mode" ] || sdf_die "cannot stat key file permissions: $file"
+  if [ $((8#$mode & 0027)) -ne 0 ]; then
+    sdf_die "key file permissions are too open: $file"
+  fi
+}
+
+sdf_prepare_key_file() {
+  local dir
+  dir="$(dirname "$SDF_KEY_FILE")"
+  install -d -m 0750 -o root -g mysql "$dir"
+  if [ ! -e "$SDF_KEY_FILE" ]; then
+    install -m 0640 -o root -g mysql /dev/null "$SDF_KEY_FILE"
+  fi
+  chown root:mysql "$SDF_KEY_FILE"
+  chmod 0640 "$SDF_KEY_FILE"
+  sdf_check_key_file_permissions "$SDF_KEY_FILE"
+}
+
 sdf_build_udf() {
   cd "$ROOT"
   make clean >/dev/null 2>&1 || true
-  # The DBA bundle is intentionally self-contained for MySQL 5.7 and does not
-  # require mysql.h / libmysqlclient development headers on the DB host.
   make abi57
 }

@@ -37,10 +37,10 @@ if [ -n "$DEFAULTS_FILE" ]; then
 fi
 MYSQL_SOCKET="$MYSQL_SOCKET" "$ROOT/bin/doctor" "${DOCTOR_ARGS[@]}"
 
-# shellcheck source=common
 source "$ROOT/bin/common"
 sdf_resolve_mysql
 sdf_mysql_args
+sdf_prepare_key_file
 sdf_read_udf_state
 if ! sdf_state_is_clean_absent; then
   sdf_die 'fresh install refuses to replace a library while UDF registrations exist; run status or uninstall first'

@@ -1,11 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for batch generic blind indexes:
-#   SecureDBFields::Crypto.blind_index_many(values, key:)
-#
-# Run:
-#   bundle exec ruby samples/ruby_blind_index_many_hot_path.rb
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_blind_index_many_hot_path"

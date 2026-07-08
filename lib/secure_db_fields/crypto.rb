@@ -105,7 +105,11 @@ module SecureDBFields
     def aad(table, column, secure_row_uid)
       uid = secure_row_uid.to_s
       raise ArgumentError, "secure_row_uid must be 16 bytes" unless uid.bytesize == 16
-      "#{table}.#{column}:".b + uid.b
+      table = table.to_s.b
+      column = column.to_s.b
+      raise ArgumentError, "table name is too long" if table.bytesize > 0xffffffff
+      raise ArgumentError, "column name is too long" if column.bytesize > 0xffffffff
+      "SDF1".b + [table.bytesize].pack("N") + table + [column.bytesize].pack("N") + column + uid.b
     end
   end
 end

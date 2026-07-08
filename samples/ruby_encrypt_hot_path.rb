@@ -1,11 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for:
-#   SecureDBFields::Crypto.encrypt(value, key:, aad:, key_id:)
-#
-# Run:
-#   bundle exec ruby samples/ruby_encrypt_hot_path.rb
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_encrypt_hot_path"

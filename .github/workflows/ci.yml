@@ -93,6 +93,4 @@ jobs:
         run: bundle exec rake compile
 
       - name: Run MySQL 5.7 UDF end-to-end test
-        # Includes app-server CLI packaging, DBA bundle install, UDF registration,
-        # encrypted fixture, admin view, blind-index search and EXPLAIN checks.
         run: bash mysql_udf/test/run_e2e.sh

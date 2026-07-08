@@ -16,5 +16,6 @@ end
 
 $CFLAGS << " -std=c99 -Wall -Wextra -Werror=implicit-function-declaration"
 $CFLAGS << " -DOPENSSL_SUPPRESS_DEPRECATED"
+$CFLAGS << " -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security"
 
 create_makefile("secure_db_fields/secure_db_fields")

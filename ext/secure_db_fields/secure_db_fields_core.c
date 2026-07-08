@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 static void sdf_set_err(char *err, size_t err_len, const char *msg) {
     if (err && err_len > 0) {
@@ -430,8 +433,31 @@ sdf_status sdf_phone_prefix_bidx(const unsigned char *e164, size_t e164_len,
         sdf_set_err(err, err_len, "prefix_digits exceeds phone digit length");
         return SDF_ERR_INVALID_ARGUMENT;
     }
-    prefix_len = 1 + (size_t)prefix_digits; /* include '+' to bind canonical form */
+    prefix_len = 1 + (size_t)prefix_digits;
     return sdf_blind_index(e164, prefix_len, key, key_len, out, err, err_len);
+}
+
+static sdf_status sdf_validate_key_file_permissions(const char *path, char *err, size_t err_len) {
+#ifndef _WIN32
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        sdf_set_err2(err, err_len, "cannot stat key file: ", path);
+        return SDF_ERR_KEY;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        sdf_set_err2(err, err_len, "key file is not a regular file: ", path);
+        return SDF_ERR_KEY;
+    }
+    if ((st.st_mode & (S_IWGRP | S_IRWXO)) != 0) {
+        sdf_set_err2(err, err_len, "key file permissions are too open: ", path);
+        return SDF_ERR_KEY;
+    }
+#else
+    (void)path;
+    (void)err;
+    (void)err_len;
+#endif
+    return SDF_OK;
 }
 
 static int sdf_hex_value(char c) {
@@ -488,6 +514,8 @@ sdf_status sdf_load_key_from_env_file(const char *path, const char *name,
         sdf_set_err(err, err_len, "invalid key lookup arguments");
         return SDF_ERR_INVALID_ARGUMENT;
     }
+    if (sdf_validate_key_file_permissions(effective_path, err, err_len) != SDF_OK)
+        return SDF_ERR_KEY;
     fp = fopen(effective_path, "r");
     if (!fp) {
         sdf_set_err2(err, err_len, "cannot open key file: ", effective_path);
@@ -497,21 +525,28 @@ sdf_status sdf_load_key_from_env_file(const char *path, const char *name,
     while (fgets(line, sizeof(line), fp)) {
         char *p = sdf_trim(line);
         char *eq;
-        if (*p == '\0' || *p == '#')
+        if (*p == '\0' || *p == '#') {
+            sdf_secure_clear(line, sizeof(line));
             continue;
+        }
         eq = strchr(p, '=');
-        if (!eq)
+        if (!eq) {
+            sdf_secure_clear(line, sizeof(line));
             continue;
+        }
         *eq = '\0';
         if (strcmp(sdf_trim(p), name) == 0) {
             char *value = sdf_trim(eq + 1);
             sdf_status st;
             (void)name_len;
-            fclose(fp);
             st = sdf_hex_decode_32(value, out, err, err_len);
+            sdf_secure_clear(line, sizeof(line));
+            fclose(fp);
             return st;
         }
+        sdf_secure_clear(line, sizeof(line));
     }
+    sdf_secure_clear(line, sizeof(line));
     fclose(fp);
     sdf_set_err2(err, err_len, "key not found in key file: ", name);
     return SDF_ERR_KEY;

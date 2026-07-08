@@ -1,12 +1,5 @@
 # frozen_string_literal: true
 
-# Native hot-path sample for cheap envelope metadata checks:
-#   valid_envelope?(blob) + key_id(blob)
-# Useful to see whether parser/header checks are negligible vs AES-GCM.
-#
-# Run:
-#   bundle exec ruby samples/ruby_envelope_parse_hot_path.rb
-
 require_relative "_sample_helper"
 
 sample_name = "secure_db_fields_ruby_envelope_parse_hot_path"
