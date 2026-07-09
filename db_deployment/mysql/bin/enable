@@ -42,12 +42,14 @@ if sdf_state_is_clean_absent; then
   sdf_read_udf_state
   sdf_state_is_clean_enabled || sdf_die 'registration did not create the expected UDF state'
   sdf_smoke_check
+  sdf_key_smoke_check
   echo 'SecureDBFields MySQL UDFs are enabled. Apply generated admin-view SQL separately.'
   exit 0
 fi
 
 if sdf_state_is_clean_enabled; then
   sdf_smoke_check
+  sdf_key_smoke_check
   echo 'SecureDBFields MySQL UDFs are already enabled; no changes made.'
   exit 0
 fi

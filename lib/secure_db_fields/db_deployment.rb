@@ -13,7 +13,7 @@ require_relative "version"
 module SecureDBFields
   module DBDeployment
     ROOT = File.expand_path("../..", __dir__)
-    BUNDLE_FORMAT_VERSION = 1
+    BUNDLE_FORMAT_VERSION = 2
     MYSQL_TARGET = "mysql"
 
     class Error < StandardError; end
@@ -49,15 +49,15 @@ module SecureDBFields
       def help
         <<~TEXT
           Usage:
-            secure_db_fields db package mysql [--output PATH] [--force]
+            secure_db_fields db package mysql [--output PATH] [--keys PATH] [--force]
 
             secure_db_fields db view mysql --table DB.TABLE --field NAME:ENC_COLUMN \\
               --uid-column secure_row_uid --view DB.VIEW --columns ID,CREATED_AT \\
               [--as NAME] [--output PATH]
 
-          `package` creates a self-contained source bundle for the DBA. The DBA
-          extracts it on the database host and runs `make doctor`, `sudo make
-          install`, `make enable`, then `make status`.
+          `package` creates a self-contained DBA bundle with the same key contract
+          used by the application. The DBA extracts it on the database host and
+          runs `make doctor`, `sudo make install`, then `make enable`.
 
           `view` emits an admin readable view. It is for projection/display only;
           indexed search must use physical bidx columns and helper procedures or
@@ -72,10 +72,11 @@ module SecureDBFields
         raise OptionParser::MissingArgument, "TARGET must be mysql" if target.nil?
         raise OptionParser::InvalidArgument, "TARGET must be mysql" unless target == MYSQL_TARGET
 
-        options = { output: nil, force: false }
+        options = { output: nil, force: false, keys: nil }
         parser = OptionParser.new do |opts|
           opts.banner = "Usage: secure_db_fields db package mysql [OPTIONS]"
           opts.on("-o", "--output PATH", "write the deployment archive to PATH") { |value| options[:output] = value }
+          opts.on("--keys PATH", "use or create the shared key contract at PATH") { |value| options[:keys] = value }
           opts.on("-f", "--force", "overwrite an existing archive") { options[:force] = true }
           opts.on("-h", "--help", "show this help") { puts opts; return 0 }
         end
@@ -83,9 +84,93 @@ module SecureDBFields
         raise OptionParser::InvalidOption, argv.join(" ") unless argv.empty?
 
         output = options[:output] || "secure_db_fields-mysql-#{SecureDBFields::VERSION}.tar.gz"
-        DeploymentBundle.new(output, force: options[:force]).write!
+        contract = KeyContract.ensure!(options[:keys] || KeyContract.default_path)
+        DeploymentBundle.new(output, force: options[:force], key_file: contract.path).write!
         puts File.expand_path(output)
         0
+      end
+    end
+
+    class KeyContract
+      DEFAULT_PATH = "config/secure_db_fields/keys.env"
+      HEX = /\A[0-9a-fA-F]{64}\z/.freeze
+      REQUIRED_HEX_KEYS = %w[SDF_BIDX_KEY_HEX SDF_BIDX_PHONE_KEY_HEX SDF_BIDX_PHONE_P7_KEY_HEX].freeze
+
+      attr_reader :path
+
+      def self.default_path
+        File.expand_path(DEFAULT_PATH, Dir.pwd)
+      end
+
+      def self.ensure!(path)
+        full = File.expand_path(path)
+        if File.exist?(full)
+          validate!(full)
+        else
+          write_new!(full)
+        end
+        new(full)
+      end
+
+      def self.write_new!(path)
+        FileUtils.mkdir_p(File.dirname(path))
+        enc = SecureRandom.hex(32)
+        bidx = SecureRandom.hex(32)
+        phone = bidx
+        phone_p7 = bidx
+        body = <<~ENV
+          SDF_ACTIVE_KEY_ID=1
+          SDF_ENC_KEY_1_HEX=#{enc}
+          SDF_ENC_KEY_HEX=#{enc}
+          SDF_BIDX_KEY_HEX=#{bidx}
+          SDF_BIDX_PHONE_KEY_HEX=#{phone}
+          SDF_BIDX_PHONE_P7_KEY_HEX=#{phone_p7}
+        ENV
+        temporary = File.join(File.dirname(path), "secure-db-fields-keys-#{Process.pid}-#{SecureRandom.hex(8)}.tmp")
+        File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write(body) }
+        File.chmod(0o600, temporary)
+        File.rename(temporary, path)
+      ensure
+        File.delete(temporary) if defined?(temporary) && File.exist?(temporary)
+      end
+
+      def self.validate!(path)
+        stat = File.stat(path)
+        raise Error, "key contract must be a regular file: #{path}" unless stat.file?
+        raise Error, "key contract permissions are too open: #{path}" unless (stat.mode & 0o077).zero?
+        values = parse(path)
+        active = values["SDF_ACTIVE_KEY_ID"]
+        raise Error, "key contract missing SDF_ACTIVE_KEY_ID: #{path}" unless active && active.match?(/\A[1-9][0-9]*\z/)
+        unless hex?(values["SDF_ENC_KEY_#{active}_HEX"]) || hex?(values["SDF_ENC_KEY_HEX"])
+          raise Error, "key contract missing SDF_ENC_KEY_#{active}_HEX or SDF_ENC_KEY_HEX: #{path}"
+        end
+        REQUIRED_HEX_KEYS.each do |name|
+          raise Error, "key contract missing #{name}: #{path}" unless hex?(values[name])
+        end
+      end
+
+      def self.parse(path)
+        values = {}
+        File.readlines(path, chomp: true).each do |line|
+          text = line.strip
+          next if text.empty? || text.start_with?("#")
+          key, value = text.split("=", 2)
+          next unless key && value
+          values[key.strip] = value.strip
+        end
+        values
+      end
+
+      def self.hex?(value)
+        value && HEX.match?(value)
+      end
+
+      def initialize(path)
+        @path = path
+      end
+
+      def data
+        File.binread(path)
       end
     end
 
@@ -221,9 +306,10 @@ module SecureDBFields
 
       attr_reader :output
 
-      def initialize(output, force: false)
+      def initialize(output, force: false, key_file:)
         @output = output
         @force = force
+        @key_file = key_file
       end
 
       def write!
@@ -239,6 +325,7 @@ module SecureDBFields
             end
             add_text(tar, "VERSION", SecureDBFields::VERSION + "\n")
             add_text(tar, "BUNDLE_FORMAT", BUNDLE_FORMAT_VERSION.to_s + "\n")
+            add_bytes(tar, File.join(bundle_name, "etc/secure_db_fields/keys.env"), File.binread(@key_file), 0o600)
             add_text(tar, "SHA256SUMS", checksums)
           end
         end
@@ -275,6 +362,7 @@ module SecureDBFields
         end
         entries << ["VERSION", SecureDBFields::VERSION + "\n"]
         entries << ["BUNDLE_FORMAT", BUNDLE_FORMAT_VERSION.to_s + "\n"]
+        entries << ["etc/secure_db_fields/keys.env", File.binread(@key_file)]
 
         entries.sort_by(&:first).map do |dst, data|
           "#{Digest::SHA256.hexdigest(data)}  #{dst}"

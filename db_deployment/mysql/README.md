@@ -6,18 +6,17 @@ This archive is produced on an application host with:
 secure_db_fields db package mysql --output secure_db_fields-mysql.tar.gz --force
 ```
 
-Copy the archive to the MySQL 5.7 host, extract it, then run:
+The archive contains the MySQL UDF source and the same `keys.env` contract used by the application. Copy the archive to the MySQL 5.7 host, extract it, then run:
 
 ```bash
 make verify
-make doctor
-sudo make install
-make enable
-make status
+make doctor MYSQL_DEFAULTS_FILE=/root/secure-db-fields-mysql.cnf MYSQL_SOCKET=/run/mysqld/mysqld.sock
+make install MYSQL_DEFAULTS_FILE=/root/secure-db-fields-mysql.cnf MYSQL_SOCKET=/run/mysqld/mysqld.sock
+make enable MYSQL_DEFAULTS_FILE=/root/secure-db-fields-mysql.cnf MYSQL_SOCKET=/run/mysqld/mysqld.sock
+make status MYSQL_DEFAULTS_FILE=/root/secure-db-fields-mysql.cnf MYSQL_SOCKET=/run/mysqld/mysqld.sock
 ```
 
-Keys are not included in this archive. The DBA must provision `/etc/secure_db_fields/keys.env`
-(or set `SECURE_DB_FIELDS_KEY_FILE` for mysqld) before using decrypt/search UDFs.
+`make install` installs `etc/secure_db_fields/keys.env` from this bundle to `/etc/secure_db_fields/keys.env` with `0640 root:mysql` permissions.
 
 Installed SQL functions:
 

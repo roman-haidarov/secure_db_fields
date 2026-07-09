@@ -3,10 +3,26 @@
 module SecureDBFields
   class Keyring
     DEFAULT_PATH = "/etc/secure_db_fields/keys.env"
+    APP_RELATIVE_PATH = "config/secure_db_fields/keys.env"
 
     attr_reader :path
 
-    def initialize(path = ENV.fetch("SECURE_DB_FIELDS_KEY_FILE", DEFAULT_PATH))
+    def self.default_path
+      env = ENV["SECURE_DB_FIELDS_KEY_FILE"]
+      return env if env && !env.empty?
+
+      if defined?(Rails) && Rails.respond_to?(:root) && Rails.root
+        rails_path = Rails.root.join(APP_RELATIVE_PATH).to_s
+        return rails_path if File.exist?(rails_path)
+      end
+
+      app_path = File.expand_path(APP_RELATIVE_PATH, Dir.pwd)
+      return app_path if File.exist?(app_path)
+
+      DEFAULT_PATH
+    end
+
+    def initialize(path = self.class.default_path)
       @path = path
       @values = parse_file(path)
     end
