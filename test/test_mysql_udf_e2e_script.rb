@@ -19,6 +19,8 @@ class SecureDBFieldsMysqlUdfE2EScriptTest < Minitest::Test
     assert_includes source, "gem build secure_db_fields.gemspec"
     assert_includes source, "gem unpack"
     assert_includes source, "db package mysql"
+    assert_includes source, "--keys"
+    assert_includes source, "etc/secure_db_fields/keys.env"
     assert_includes source, "make verify"
     assert_includes source, "make doctor"
     assert_includes source, "make install"

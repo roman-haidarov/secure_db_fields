@@ -35,12 +35,13 @@ module SecureDBFields
       <<~TEXT
         Usage:
           secure_db_fields --version
-          secure_db_fields db package mysql [--output PATH] [--force]
+          secure_db_fields db package mysql [--output PATH] [--keys PATH] [--force]
           secure_db_fields db view mysql --table DB.TABLE --field NAME:ENC_COLUMN \\
             --uid-column secure_row_uid --view DB.VIEW --columns ID,CREATED_AT [--output PATH]
 
-        `db package mysql` creates a DBA handoff archive. Extract it on the MySQL 5.7
-        host and run `make doctor`, `sudo make install`, `make enable`, `make status`.
+        `db package mysql` creates a DBA handoff archive containing the shared
+        key contract used by the application. Extract it on the MySQL 5.7 host
+        and run `make doctor`, `make install`, `make enable`, `make status`.
       TEXT
     end
   end

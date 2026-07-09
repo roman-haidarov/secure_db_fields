@@ -9,7 +9,7 @@
 #endif
 #include <openssl/sha.h>
 
-#define SDF_VERSION "0.1.1"
+#define SDF_VERSION "0.1.2"
 
 #define SDF_MAGIC            "MCEN"
 #define SDF_MAGIC_LEN        4

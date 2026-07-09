@@ -82,7 +82,7 @@ make enable
 make status
 ```
 
-Keys are intentionally not included in the archive. Provision `/etc/secure_db_fields/keys.env` on the DB host before using decrypt/search UDFs.
+The command creates or reuses `config/secure_db_fields/keys.env` and includes that same key contract in the DBA archive. `make install` installs it on the DB host as `/etc/secure_db_fields/keys.env`, so the application and MySQL use the same keys without manual HEX copying.
 
 Readable view SQL can be generated from the application side as well:
 

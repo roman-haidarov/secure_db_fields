@@ -60,4 +60,4 @@ The Ruby extension has separate scalar and batch paths:
 - Ruby encrypt/decrypt paths allocate the destination Ruby String first and call
   `sdf_*_aes_256_gcm_into`, avoiding native `malloc -> rb_str_new copy -> free`.
 
-The version remains `0.1.1`; these are implementation-level hot-path optimizations.
+The hot-path notes below describe the 0.1.1 implementation-level optimizations. Version 0.1.2 adds the DBA bundle key-contract flow without changing the envelope format.

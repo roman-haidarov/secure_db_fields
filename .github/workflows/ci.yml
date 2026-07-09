@@ -61,8 +61,11 @@ jobs:
             --output tmp/ci/secure_db_fields-mysql.tar.gz \
             --force
           test -s tmp/ci/secure_db_fields-mysql.tar.gz
-          tar -tzf tmp/ci/secure_db_fields-mysql.tar.gz | grep -Fx 'secure_db_fields-mysql-0.1.1/Makefile'
-          tar -tzf tmp/ci/secure_db_fields-mysql.tar.gz | grep -Fx 'secure_db_fields-mysql-0.1.1/bin/install'
+          version="$(ruby -I lib -rsecure_db_fields/version -e 'print SecureDBFields::VERSION')"
+          root="secure_db_fields-mysql-${version}"
+          tar -tzf tmp/ci/secure_db_fields-mysql.tar.gz | grep -Fx "${root}/Makefile"
+          tar -tzf tmp/ci/secure_db_fields-mysql.tar.gz | grep -Fx "${root}/bin/install"
+          tar -tzf tmp/ci/secure_db_fields-mysql.tar.gz | grep -Fx "${root}/etc/secure_db_fields/keys.env"
 
   mysql-e2e:
     name: MySQL 5.7 UDF e2e

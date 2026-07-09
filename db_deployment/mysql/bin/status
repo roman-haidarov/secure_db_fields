@@ -1,11 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(dirname "$0")/common"
 
-printf 'plugin_dir=%s\n' "$(plugin_dir)"
-printf 'registered_functions=%s\n' "$(function_count)"
-if mysql_cmd -e 'SELECT secure_db_fields_version() AS version;' >/dev/null 2>&1; then
-  mysql_cmd -e 'SELECT secure_db_fields_version() AS version;'
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MYSQL="${MYSQL:-mysql}"
+DEFAULTS_FILE=""
+MYSQL_SOCKET="${MYSQL_SOCKET:-}"
+
+usage() {
+  cat <<'TEXT'
+Usage: MYSQL_SOCKET=/run/mysqld/mysqld.sock ./bin/status [--mysql PATH] [--defaults-extra-file PATH]
+TEXT
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --mysql)
+      [ "$#" -ge 2 ] || { echo '--mysql requires a path' >&2; exit 2; }
+      MYSQL="$2"; shift 2 ;;
+    --defaults-extra-file)
+      [ "$#" -ge 2 ] || { echo '--defaults-extra-file requires a path' >&2; exit 2; }
+      DEFAULTS_FILE="$2"; shift 2 ;;
+    --help|-h)
+      usage; exit 0 ;;
+    *)
+      echo "secure_db_fields mysql status: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+source "$ROOT/bin/common"
+sdf_resolve_mysql
+sdf_mysql_args
+sdf_require_mysql57
+sdf_read_udf_state
+
+plugin_dir="$(sdf_plugin_dir)"
+printf 'plugin_dir=%s\n' "$plugin_dir"
+printf 'registered_functions=%s\n' "$SDF_EXPECTED_OWNED"
+
+if sdf_state_is_clean_enabled; then
+  echo 'state=enabled'
+  sdf_smoke_check
+  if sdf_key_smoke_check >/dev/null 2>&1; then
+    echo 'key_smoke=ok'
+  else
+    echo 'key_smoke=failed'
+  fi
+  sdf_query 'SELECT secure_db_fields_version();'
+elif sdf_state_is_clean_absent; then
+  echo 'state=disabled'
 else
-  echo 'secure_db_fields_version() is not enabled'
+  echo 'state=partial_or_conflicting'
+  printf '%s\n' "${SDF_REGISTERED_ROWS[@]}"
+  exit 2
 fi
